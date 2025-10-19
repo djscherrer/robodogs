@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "metarl-mujoco-starter"
+version = "0.1.0"
+description = "Working-memory Meta-RL + Motion Imitation scaffold (MuJoCo)"
+requires-python = ">=3.9"
+dependencies = [
+  "numpy",
+  "torch",
+  "gymnasium>=0.28",
+  "mujoco>=3.0.0",
+  "mujoco-python-viewer; platform_system!='Darwin'",
+  "tqdm",
+  "pydantic",
+  "matplotlib",
+]

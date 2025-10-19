@@ -1,0 +1,77 @@
+{
+  "environment_params": {
+    "model_xml": "models/a1/a1.xml",
+    "control_frequency_hz": 50,
+    "pd_frequency_hz": 200,
+    "episode_steps": 128,
+    "terminate_on_fall": true,
+    "obs_include": [
+      "qpos",
+      "qvel",
+      "base_height",
+      "base_linvel",
+      "base_angvel",
+      "gravity",
+      "vcmd",
+      "wcmd",
+      "phase_cos",
+      "phase_sin",
+      "prev_action"
+    ],
+    "action_clip": 1.0,
+    "rsi": true
+  },
+  "reward_params": {
+    "sigma": {
+      "base_height": 0.05,
+      "base_velocity": [
+        0.3,
+        0.1,
+        0.3
+      ],
+      "feet_pos": [
+        0.3,
+        0.05,
+        0.3
+      ],
+      "yaw_rate": 0.5,
+      "action_rate": 1.5,
+      "slip": 0.1,
+      "pitch_roll": 0.5
+    },
+    "weights": {
+      "rh": 1.0,
+      "rv": 1.0,
+      "ree": 1.0,
+      "r_yawrate": 1.0,
+      "r_daction": 0.1,
+      "r_slip": 0.1,
+      "r_pitchroll": 0.2
+    }
+  },
+  "morphology_params": {
+    "scale_range": [
+      0.5,
+      1.5
+    ],
+    "train_num_robots": 32,
+    "test_num_robots": 40
+  },
+  "train_hyp_params": {
+    "algo": "ppo_rnn",
+    "time_steps": 1000000,
+    "num_envs": 16,
+    "n_steps": 256,
+    "batch_size": 1024,
+    "gamma": 0.95,
+    "learning_rate": 5e-05,
+    "entropy_coef": 0.01,
+    "value_coef": 0.5,
+    "clip_range": 0.2,
+    "update_epochs": 10,
+    "sequence_length": 16,
+    "meta_episode_length": 5,
+    "random_seed": 42,
+    "log_interval": 10
+  }
+}
