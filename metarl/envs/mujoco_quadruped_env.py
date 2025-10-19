@@ -11,12 +11,7 @@ import time
 import math
 import numpy as np
 import gymnasium as gym
-
-try:
-    import mujoco
-except Exception as e:
-    mujoco = None
-
+import mujoco
 
 
 from .gait import contact_phase, phase_embedding, trot_contact_schedule
@@ -38,18 +33,17 @@ class QuadrupedMujocoEnv(gym.Env):
         self.rsi = rsi
         self.reward_params = reward_params or {}
         self.obs_include = obs_include or []
+
         # per-joint angle limits (rad) aligned to JOINT_ORDER
         self.joint_low  = np.array([-0.35, -1.2, -2.0] * 4, dtype=np.float32)
         self.joint_high = np.array([+0.35, +1.2,  0.0] * 4, dtype=np.float32)
 
-        if mujoco is not None:
-            self.model = mujoco.MjModel.from_xml_path(self.model_xml)
-            self.data = mujoco.MjData(self.model)
-        else:
-            self.model = None
-            self.data = None
 
-        self.num_joints = 12  # assumed
+        self.model = mujoco.MjModel.from_xml_path(self.model_xml)
+        self.data = mujoco.MjData(self.model)
+
+
+        self.num_joints = 12
         self.action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(self.num_joints,), dtype=np.float32)
 
         # Example observation size; adjust to your signals
@@ -59,6 +53,7 @@ class QuadrupedMujocoEnv(gym.Env):
         self._t = 0
         self._step_count = 0
         self._prev_action = np.zeros(self.num_joints, dtype=np.float32)
+
 
         # Joint and actuator order you want for the action vector (edit to match your a1.xml)
         self.JOINT_ORDER = [
@@ -70,16 +65,14 @@ class QuadrupedMujocoEnv(gym.Env):
         self.joint_ids = [mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, j) for j in self.JOINT_ORDER]
         self.dof_addrs = [self.model.jnt_dofadr[jid] for jid in self.joint_ids]
 
+
         # If you use position actuators (recommended), map them as well:
         self.ACT_ORDER = [f"a_{n}" for n in self.JOINT_ORDER]   # or whatever your XML actuator names are
         self.actuator_ids = [mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, a) for a in self.ACT_ORDER]
 
         # Base body id for sensing
-        try:
-            self.base_bid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "trunk")
-        except Exception:
-            raise RuntimeError("Body 'trunk' not found. Check your a1.xml body names.")
-        assert self.base_bid >= 0, "Invalid base body id"
+        self.base_bid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "trunk")
+
 
         # Optional foot sites (add in MJCF for clean sensing)
         def sid(name):
