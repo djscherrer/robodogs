@@ -1,4 +1,4 @@
-name: RoboDogs
+name: robodogs
 channels:
   - conda-forge
   - defaults
@@ -116,7 +116,6 @@ dependencies:
   - munkres=1.1.4=pyhd8ed1ab_1
   - ncurses=6.5=h5e97a16_3
   - nest-asyncio=1.6.0=pyhd8ed1ab_1
-  - numpy=1.26.4=py310hd45542a_0
   - openjpeg=2.5.4=hbfb3c88_0
   - openssl=3.5.4=h5503f6c_0
   - opt_einsum=3.4.0=pyhd8ed1ab_1
@@ -126,7 +125,6 @@ dependencies:
   - parso=0.8.5=pyhcf101f3_0
   - pexpect=4.9.0=pyhd8ed1ab_1
   - pickleshare=0.7.5=pyhd8ed1ab_1004
-  - pillow=11.3.0=py310h5de80a5_3
   - pip=25.2=pyh8b19718_0
   - platformdirs=4.5.0=pyhcf101f3_0
   - playground=0.0.3=pyhd8ed1ab_0
@@ -181,4 +179,15 @@ dependencies:
   - zeromq=4.3.5=h888dc83_9
   - zipp=3.23.0=pyhd8ed1ab_0
   - zstd=1.5.7=h6491c7d_2
-prefix: /opt/homebrew/Caskroom/miniconda/base/envs/RoboDogs
+  - pip:
+      - farama-notifications==0.0.4
+      - filelock==3.20.0
+      - gymnasium==1.2.1
+      - mpmath==1.3.0
+      - networkx==3.4.2
+      - numpy==2.2.6
+      - pillow==12.0.0
+      - sympy==1.14.0
+      - torch==2.9.0
+      - torchaudio==2.9.0
+      - torchvision==0.24.0
