@@ -4,10 +4,10 @@ from metarl.envs.mujoco_quadruped_env import QuadrupedMujocoEnv
 import json
 
 XML = "models/a1/a1.xml"              # adjust if needed
-CKPT = "checkpoints/policy_old.pt"  # make sure this exists
+CKPT = "checkpoints/policy_2M.pt"  # make sure this exists
 CFG = "configs/metarl_default.json"
-STEPS = 500
-RENDER = False                        # set True if you wired env.render()
+STEPS = 100000
+RENDER = True                        # set True if you wired env.render()
 
 def pick_device(prefer=None):
     prefer = (prefer or "").lower()

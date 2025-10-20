@@ -98,15 +98,42 @@ class QuadrupedMujocoEnv(gym.Env):
         return 0.5 * (a_norm + 1.0) * (self.joint_high - self.joint_low) + self.joint_low
 
     def _reference(self, t):
-        """Kinematic reference generator placeholder. Returns dict with h, v, feet, yawrate, phase emb."""
-        # TODO: integrate vcmd, wcmd; foot placement heuristics (Kang et al. Eq. 2-3 in ref [43] of paper)
+        """Procedural trot gait reference generator (forward 0.2 m/s)."""
+        freq = 2.0  # Hz
+        ph = contact_phase(t, freq_hz=freq)
+        c, s = phase_embedding(ph)
+
+        # Base motion
         h_ref = 0.28
-        v_ref = np.array([0.2, 0.0, 0.0])  # forward, vertical, sideways
-        feet_ref = np.zeros((4,3))         # target feet positions in body/world frame
+        v_ref = np.array([0.2, 0.0, 0.0])
         yawrate_ref = 0.0
-        ph = contact_phase(t, freq_hz=2.0)
-        c,s = phase_embedding(ph)
-        return {"h": h_ref, "v": v_ref, "feet": feet_ref, "yawrate": yawrate_ref, "phase": (c,s)}
+
+        # Foot trajectories
+        PHASE_OFFSETS = {"LF": 0.0, "RH": 0.0, "RF": 0.5, "LH": 0.5}
+        FOOT_NOMINAL = {
+            "LF": np.array([+0.20, +0.10, -0.25]),
+            "RF": np.array([+0.20, -0.10, -0.25]),
+            "LH": np.array([-0.20, +0.10, -0.25]),
+            "RH": np.array([-0.20, -0.10, -0.25]),
+        }
+        step_len, step_h = 0.10, 0.05
+
+        feet_ref = []
+        for leg in ["LF", "RF", "LH", "RH"]:
+            base = FOOT_NOMINAL[leg].copy()
+            leg_phase = (ph + PHASE_OFFSETS[leg]) % 1.0
+            if leg_phase < 0.5:  # stance
+                x = base[0] - step_len * (leg_phase / 0.5)
+                z = base[2]
+            else:  # swing
+                p = (leg_phase - 0.5) / 0.5
+                x = base[0] - step_len * (1 - p)
+                z = base[2] + step_h * np.sin(np.pi * p)
+            feet_ref.append(np.array([x, base[1], z]))
+        feet_ref = np.vstack(feet_ref)
+
+        return {"h": h_ref, "v": v_ref, "feet": feet_ref,
+                "yawrate": yawrate_ref, "phase": (c, s)}
     
     def _sense_for_reward(self):
         # Base height
@@ -197,7 +224,7 @@ class QuadrupedMujocoEnv(gym.Env):
     def step(self, action):
         action = np.asarray(action, dtype=np.float32)
 
-        # --- PD inner loop (omitted) ---
+        # --- PD inner loop ---
         targets = self._action_to_targets(action)
         for _ in range(max(1, self.inner_steps)):
             for i, aid in enumerate(self.actuator_ids):
@@ -237,4 +264,83 @@ class QuadrupedMujocoEnv(gym.Env):
         return obs_vec, float(r), terminated, truncated, info
 
     def render(self):
-        pass
+        """Live viewer using mujoco.viewer if available; fallback to GLFW if not."""
+        # Try the official viewer first (works with pip mujoco>=3.x)
+        try:
+            from mujoco import viewer  # <-- explicit import of submodule
+            if not hasattr(self, "_viewer") or self._viewer is None:
+                # Set your backend before launching:
+                #   export MUJOCO_GL=glfw   # local interactive
+                #   export MUJOCO_GL=egl    # headless GPU
+                #   export MUJOCO_GL=osmesa # CPU
+                self._viewer = viewer.launch_passive(self.model, self.data)
+            self._viewer.sync()
+            return
+        except Exception as e:
+            # Fall back to manual GLFW renderer if the official viewer isn't available
+            import traceback
+            _viewer_err = "".join(traceback.format_exception_only(type(e), e)).strip()
+
+        # ---------- GLFW fallback (MuJoCo 2.3.x / no viewer build) ----------
+        try:
+            import glfw
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to use mujoco.viewer ({_viewer_err}) and glfw is missing. "
+                "Install fallback with: pip install glfw"
+            ) from e
+
+        if not glfw.init():
+            raise RuntimeError("GLFW init failed. On headless, set MUJOCO_GL=egl or osmesa.")
+
+        if not hasattr(self, "_window") or self._window is None:
+            self._win_w, self._win_h = 1280, 720
+            self._window = glfw.create_window(self._win_w, self._win_h, "MuJoCo Viewer", None, None)
+            if not self._window:
+                glfw.terminate()
+                raise RuntimeError("Failed to create GLFW window.")
+            glfw.make_context_current(self._window)
+
+            self._cam = mujoco.MjvCamera(); mujoco.mjv_defaultCamera(self._cam)
+            self._opt = mujoco.MjvOption(); mujoco.mjv_defaultOption(self._opt)
+            self._scene = mujoco.MjvScene(self.model, maxgeom=10000)
+            self._context = mujoco.MjrContext(self.model, mujoco.mjtFontScale.mjFONTSCALE_150)
+
+            # camera follow trunk
+            self._cam.lookat[:] = self.data.xpos[self.base_bid]
+            self._cam.distance = 1.8; self._cam.elevation = -15; self._cam.azimuth = 180
+
+        if glfw.window_should_close(self._window):
+            return
+        fb_w, fb_h = glfw.get_framebuffer_size(self._window)
+        viewport = mujoco.MjrRect(0, 0, fb_w, fb_h)
+        self._cam.lookat[:] = self.data.xpos[self.base_bid]
+
+        mujoco.mjv_updateScene(self.model, self.data, self._opt, None, self._cam,
+                            mujoco.mjtCatBit.mjCAT_ALL, self._scene)
+        mujoco.mjr_render(viewport, self._scene, self._context)
+        glfw.swap_buffers(self._window)
+        glfw.poll_events()
+
+
+    def close(self):
+        # close official viewer
+        try:
+            from mujoco import viewer as _v
+            if hasattr(self, "_viewer") and self._viewer is not None:
+                try: self._viewer.close()
+                except Exception: pass
+                self._viewer = None
+        except Exception:
+            pass
+        # close GLFW fallback
+        if hasattr(self, "_window") and self._window is not None:
+            import glfw
+            try:
+                mujoco.mjr_freeContext(getattr(self, "_context", None))
+                mujoco.mjv_freeScene(getattr(self, "_scene", None))
+            except Exception:
+                pass
+            glfw.destroy_window(self._window)
+            glfw.terminate()
+            self._window = None
