@@ -236,5 +236,86 @@ class QuadrupedMujocoEnv(gym.Env):
         info = {"ref_phase": ref["phase"]}
         return obs_vec, float(r), terminated, truncated, info
 
+    # def render(self):
+    #     pass
     def render(self):
-        pass
+        """Live viewer using mujoco.viewer if available; fallback to GLFW if not."""
+        # Try the official viewer first (works with pip mujoco>=3.x)
+        try:
+            from mujoco import viewer  # <-- explicit import of submodule
+            if not hasattr(self, "_viewer") or self._viewer is None:
+                # Set your backend before launching:
+                #   export MUJOCO_GL=glfw   # local interactive
+                #   export MUJOCO_GL=egl    # headless GPU
+                #   export MUJOCO_GL=osmesa # CPU
+                self._viewer = viewer.launch_passive(self.model, self.data)
+            self._viewer.sync()
+            return
+        except Exception as e:
+            # Fall back to manual GLFW renderer if the official viewer isn't available
+            import traceback
+            _viewer_err = "".join(traceback.format_exception_only(type(e), e)).strip()
+
+        # ---------- GLFW fallback (MuJoCo 2.3.x / no viewer build) ----------
+        try:
+            import glfw
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to use mujoco.viewer ({_viewer_err}) and glfw is missing. "
+                "Install fallback with: pip install glfw"
+            ) from e
+
+        if not glfw.init():
+            raise RuntimeError("GLFW init failed. On headless, set MUJOCO_GL=egl or osmesa.")
+
+        if not hasattr(self, "_window") or self._window is None:
+            self._win_w, self._win_h = 1280, 720
+            self._window = glfw.create_window(self._win_w, self._win_h, "MuJoCo Viewer", None, None)
+            if not self._window:
+                glfw.terminate()
+                raise RuntimeError("Failed to create GLFW window.")
+            glfw.make_context_current(self._window)
+
+            self._cam = mujoco.MjvCamera(); mujoco.mjv_defaultCamera(self._cam)
+            self._opt = mujoco.MjvOption(); mujoco.mjv_defaultOption(self._opt)
+            self._scene = mujoco.MjvScene(self.model, maxgeom=10000)
+            self._context = mujoco.MjrContext(self.model, mujoco.mjtFontScale.mjFONTSCALE_150)
+
+            # camera follow trunk
+            self._cam.lookat[:] = self.data.xpos[self.base_bid]
+            self._cam.distance = 1.8; self._cam.elevation = -15; self._cam.azimuth = 180
+
+        if glfw.window_should_close(self._window):
+            return
+        fb_w, fb_h = glfw.get_framebuffer_size(self._window)
+        viewport = mujoco.MjrRect(0, 0, fb_w, fb_h)
+        self._cam.lookat[:] = self.data.xpos[self.base_bid]
+
+        mujoco.mjv_updateScene(self.model, self.data, self._opt, None, self._cam,
+                            mujoco.mjtCatBit.mjCAT_ALL, self._scene)
+        mujoco.mjr_render(viewport, self._scene, self._context)
+        glfw.swap_buffers(self._window)
+        glfw.poll_events()
+
+
+    def close(self):
+        # close official viewer
+        try:
+            from mujoco import viewer as _v
+            if hasattr(self, "_viewer") and self._viewer is not None:
+                try: self._viewer.close()
+                except Exception: pass
+                self._viewer = None
+        except Exception:
+            pass
+        # close GLFW fallback
+        if hasattr(self, "_window") and self._window is not None:
+            import glfw
+            try:
+                mujoco.mjr_freeContext(getattr(self, "_context", None))
+                mujoco.mjv_freeScene(getattr(self, "_scene", None))
+            except Exception:
+                pass
+            glfw.destroy_window(self._window)
+            glfw.terminate()
+            self._window = None

@@ -10,12 +10,23 @@ from metarl.policies.gru_policy import GRUPolicy
 from metarl.algorithms.ppo_rnn import RecurrentPPO, PPOConfig
 from metarl.utils.rollout_buffer import RecurrentRolloutBuffer
 
+def pick_device(prefer=None):
+    prefer = (prefer or "").lower()
+    if prefer == "cuda" and torch.cuda.is_available(): return torch.device("cuda")
+    if prefer == "mps" and hasattr(torch.backends, "mps") and torch.backends.mps.is_available(): return torch.device("mps")
+    if torch.cuda.is_available(): return torch.device("cuda")
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available(): return torch.device("mps")
+    return torch.device("cpu")
+
 def main(args):
     with open(args.config, "r") as f:
         params = json.load(f)
     envp = params["environment_params"]
     rew = params["reward_params"]
     hyp = params["train_hyp_params"]
+
+    device = pick_device()
+    print("Using device:", device)
 
     env = QuadrupedMujocoEnv(
         model_xml=envp["model_xml"],
@@ -30,7 +41,7 @@ def main(args):
 
     obs_dim = env.observation_space.shape[0]
     act_dim = env.action_space.shape[0]
-    policy = GRUPolicy(obs_dim, act_dim, hidden_state_size=16)
+    policy = GRUPolicy(obs_dim, act_dim, hidden_state_size=16).to(device)
     algo = RecurrentPPO(policy, PPOConfig(
         gamma=hyp["gamma"],
         learning_rate=hyp["learning_rate"],
@@ -47,11 +58,18 @@ def main(args):
     total_steps = hyp["time_steps"]
     buf = RecurrentRolloutBuffer(steps_per_update, obs_dim, act_dim)
     rng = np.random.RandomState(hyp.get("random_seed",42))
-
     obs, _ = env.reset(seed=hyp.get("random_seed",42))
+    hidden_size = policy.hidden_state_size 
+    h_state = torch.zeros(1, 1, hidden_size).to(device)
+     # [1,1,obs_dim]
+
     for t in range(total_steps):
+        obs_tensor = torch.tensor(obs, dtype=torch.float32).unsqueeze(0).unsqueeze(0).to(device)
         # simple random action to fill buffer initially (replace with policy sample after wiring evaluate/logp)
         action = rng.uniform(-1,1,size=act_dim).astype(np.float32)
+        mu, _, hT = policy(obs_tensor, h_state)
+        dist = torch.distributions.Normal(mu.squeeze(0), policy.log_std.exp())
+        action = dist.sample().cpu().numpy().squeeze(0)
         next_obs, rew, term, trunc, info = env.step(action)
         # placeholders for logp, value
         lp = 0.0; v = 0.0

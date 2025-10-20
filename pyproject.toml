@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -12,8 +12,12 @@ dependencies = [
   "torch",
   "gymnasium>=0.28",
   "mujoco>=3.0.0",
-  "mujoco-python-viewer; platform_system!='Darwin'",
+  "mujoco-python-viewer; platform_system != 'Darwin'",
   "tqdm",
   "pydantic",
   "matplotlib",
 ]
+
+[tool.setuptools]
+packages = ["metarl"]
+include-package-data = true

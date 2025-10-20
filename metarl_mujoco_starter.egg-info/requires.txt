@@ -1,0 +1,10 @@
+numpy
+torch
+gymnasium>=0.28
+mujoco>=3.0.0
+tqdm
+pydantic
+matplotlib
+
+[:platform_system != "Darwin"]
+mujoco-python-viewer

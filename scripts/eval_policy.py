@@ -4,10 +4,10 @@ from metarl.envs.mujoco_quadruped_env import QuadrupedMujocoEnv
 import json
 
 XML = "models/a1/a1.xml"              # adjust if needed
-CKPT = "checkpoints/policy_old.pt"  # make sure this exists
+CKPT = "checkpoints/policy_final.pt"  # make sure this exists
 CFG = "configs/metarl_default.json"
-STEPS = 500
-RENDER = False                        # set True if you wired env.render()
+STEPS = 50000
+RENDER = True                        # set True if you wired env.render()
 
 def pick_device(prefer=None):
     prefer = (prefer or "").lower()
@@ -49,6 +49,9 @@ with torch.no_grad():
         if RENDER:
             env.render()
         if done or trunc:
+            print(f"Done:{done}, Trunc:{trunc} at step {t+1}")
             break
+    env.close()
+
 
 print(f"Episode steps: {steps}  |  Total reward: {total_reward:.3f}  |  Avg/step: {total_reward/steps:.3f}")

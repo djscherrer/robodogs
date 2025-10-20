@@ -1,0 +1,13 @@
+Metadata-Version: 2.4
+Name: metarl-mujoco-starter
+Version: 0.1.0
+Summary: Working-memory Meta-RL + Motion Imitation scaffold (MuJoCo)
+Requires-Python: >=3.9
+Requires-Dist: numpy
+Requires-Dist: torch
+Requires-Dist: gymnasium>=0.28
+Requires-Dist: mujoco>=3.0.0
+Requires-Dist: mujoco-python-viewer; platform_system != "Darwin"
+Requires-Dist: tqdm
+Requires-Dist: pydantic
+Requires-Dist: matplotlib
