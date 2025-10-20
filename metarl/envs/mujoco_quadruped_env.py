@@ -34,11 +34,6 @@ class QuadrupedMujocoEnv(gym.Env):
         self.reward_params = reward_params or {}
         self.obs_include = obs_include or []
 
-        # per-joint angle limits (rad) aligned to JOINT_ORDER
-        self.joint_low  = np.array([-0.35, -1.2, -2.0] * 4, dtype=np.float32)
-        self.joint_high = np.array([+0.35, +1.2,  0.0] * 4, dtype=np.float32)
-
-
         self.model = mujoco.MjModel.from_xml_path(self.model_xml)
         self.data = mujoco.MjData(self.model)
 
@@ -63,6 +58,7 @@ class QuadrupedMujocoEnv(gym.Env):
             "RH_hip_abd", "RH_hip_pitch", "RH_knee",
         ]
         self.joint_ids = [mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, j) for j in self.JOINT_ORDER]
+        self._auto_joint_limits()
         self.dof_addrs = [self.model.jnt_dofadr[jid] for jid in self.joint_ids]
 
 
@@ -88,6 +84,15 @@ class QuadrupedMujocoEnv(gym.Env):
         }
 
     # --------- Helpers ---------
+    def _auto_joint_limits(self):
+        lo, hi = [], []
+        for jid in self.joint_ids:
+            r0, r1 = self.model.jnt_range[jid]
+            if r0 == 0.0 and r1 == 0.0: r0, r1 = -0.5, 0.5  # fallback
+            lo.append(r0); hi.append(r1)
+        self.joint_low  = np.array(lo, dtype=np.float32)
+        self.joint_high = np.array(hi, dtype=np.float32)
+
     def _action_to_targets(self, a_norm):
         a_norm = np.clip(a_norm, -1.0, 1.0)
         return 0.5 * (a_norm + 1.0) * (self.joint_high - self.joint_low) + self.joint_low
