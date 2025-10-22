@@ -57,26 +57,41 @@ def main(args):
     steps_per_update = hyp["n_steps"]
     total_steps = hyp["time_steps"]
     buf = RecurrentRolloutBuffer(steps_per_update, obs_dim, act_dim)
-    rng = np.random.RandomState(hyp.get("random_seed",42))
     obs, _ = env.reset(seed=hyp.get("random_seed",42))
     hidden_size = policy.hidden_state_size 
-    h_state = torch.zeros(1, 1, hidden_size).to(device)
-     # [1,1,obs_dim]
+    h_state = torch.zeros(1, 1, hidden_size, device=device)
+    last_done = False
 
     for t in range(total_steps):
-        obs_tensor = torch.tensor(obs, dtype=torch.float32).unsqueeze(0).unsqueeze(0).to(device)
-        # simple random action to fill buffer initially (replace with policy sample after wiring evaluate/logp)
-        action = rng.uniform(-1,1,size=act_dim).astype(np.float32)
-        mu, _, hT = policy(obs_tensor, h_state)
-        dist = torch.distributions.Normal(mu.squeeze(0), policy.log_std.exp())
-        action = dist.sample().cpu().numpy().squeeze(0)
+        obs_tensor = torch.tensor(obs, dtype=torch.float32, device=device).unsqueeze(0).unsqueeze(0)
+        with torch.no_grad():
+            mu, value_tensor, next_h_state = policy(obs_tensor, h_state)
+            std = policy.log_std.exp()
+            dist = torch.distributions.Normal(mu, std)
+            action_tensor = dist.sample()
+            logp_tensor = dist.log_prob(action_tensor).sum(-1)
+        action = action_tensor.squeeze(0).squeeze(0).cpu().numpy().astype(np.float32)
+        value = value_tensor.squeeze().detach().cpu().item()
+        logp = logp_tensor.squeeze().detach().cpu().item()
         next_obs, rew, term, trunc, info = env.step(action)
-        # placeholders for logp, value
-        lp = 0.0; v = 0.0
-        buf.add(obs, action, rew, term or trunc, lp, v)
-        obs = next_obs
+        done = bool(term or trunc)
+        buf.add(obs, action, rew, done, logp, value)
+        h_state = next_h_state.detach()
+        if done:
+            obs, _ = env.reset()
+            h_state = torch.zeros_like(h_state)
+        else:
+            obs = next_obs
+        last_done = done
         if (t+1) % steps_per_update == 0:
-            buf.compute_returns_advantages(gamma=hyp["gamma"])
+            with torch.no_grad():
+                if last_done:
+                    bootstrap_value = 0.0
+                else:
+                    bootstrap_obs = torch.tensor(obs, dtype=torch.float32, device=device).unsqueeze(0).unsqueeze(0)
+                    _, value_bootstrap, _ = policy(bootstrap_obs, h_state)
+                    bootstrap_value = value_bootstrap.squeeze().detach().cpu().item()
+            buf.compute_returns_advantages(gamma=hyp["gamma"], last_value=bootstrap_value)
             algo.update(buf)
             buf = RecurrentRolloutBuffer(steps_per_update, obs_dim, act_dim)
             if (t+1) % hyp.get("n_steps", steps_per_update) == 0:
