@@ -84,7 +84,7 @@ def main(args):
 
     steps_per_update = hyp["n_steps"]
     total_steps = hyp["time_steps"]
-    buf = RecurrentRolloutBuffer(steps_per_update, obs_dim, act_dim)
+    buf = RecurrentRolloutBuffer(steps_per_update, obs_dim, act_dim, hidden_size=16)
 
 
     # init env + hidden
@@ -144,8 +144,8 @@ def main(args):
             if (t + 1) % steps_per_update == 0:
                 print(f"Trained up to step {t+1}")
 
-    torch.save(policy.state_dict(), "checkpoints/policy_final.pt")
-    print("✅ Saved trained policy to checkpoints/policy_final.pt")
+    torch.save(policy.state_dict(), "checkpoints/quadruped/policy_final.pt")
+    print("✅ Saved trained policy to checkpoints/quadruped/policy_final.pt")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
