@@ -16,7 +16,7 @@ class Step:
     mask: float
 
 class RecurrentRolloutBuffer:
-    def __init__(self, capacity, obs_dim, act_dim):
+    def __init__(self, capacity, obs_dim, act_dim, hidden_size):
         self.capacity = capacity
         self.obs = np.zeros((capacity, obs_dim), dtype=np.float32)
         self.actions = np.zeros((capacity, act_dim), dtype=np.float32)
@@ -25,6 +25,7 @@ class RecurrentRolloutBuffer:
         self.logp = np.zeros((capacity,), dtype=np.float32)
         self.values = np.zeros((capacity,), dtype=np.float32)
         self.masks = np.ones((capacity,), dtype=np.float32)
+        self.hidden_size = hidden_size
         self.ptr = 0
 
     def add(self, o,a,r,d,lp,v):
@@ -65,5 +66,5 @@ class RecurrentRolloutBuffer:
             advantages = torch.tensor(self.advantages[sel[0]:sel[0]+seq_len])[None, ...]
             old_logp = torch.tensor(self.logp[sel[0]:sel[0]+seq_len])[None, ...]
             masks = torch.tensor(self.masks[sel[0]:sel[0]+seq_len])[None, ...]
-            h0 = torch.zeros(1,1,16)  # hidden size 16
+            h0 = torch.zeros(1,1,self.hidden_size)
             yield obs, actions, returns, advantages, old_logp, masks, h0, returns
