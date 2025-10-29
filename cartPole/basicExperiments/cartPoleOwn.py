@@ -96,7 +96,6 @@ class CartPoleCustom(CartPoleEnv):
         self.polemass_length = self.masspole * self.length
 
 
-
 def make_env(env_id, idx, capture_video, run_name):
     def thunk():
         if capture_video and idx == 0:
@@ -147,6 +146,59 @@ class Agent(nn.Module):
         if action is None:
             action = probs.sample()
         return action, probs.log_prob(action), probs.entropy(), self.critic(x)
+
+def make_evaluate_env(env_id, video_dir=None, seed=0) -> gym.wrappers.RecordVideo | gym.wrappers.RecordEpisodeStatistics:
+    render_mode = "rgb_array" if video_dir else None
+    env = gym.make(env_id, render_mode=render_mode)
+    env = gym.wrappers.RecordEpisodeStatistics(env)
+    if video_dir:
+        env = gym.wrappers.RecordVideo(env, video_dir, episode_trigger=lambda _: True)
+    env.reset(seed=seed)
+    return env
+
+def return_config(env: gym.Env):
+    base = env.unwrapped
+    cfg = {
+        "length": base.length,
+        "gravity": base.gravity,
+        "masscart": base.masscart,
+        "masspole": base.masspole,
+        "force_mag": base.force_mag,
+        "tau": base.tau,
+        "max_episode_steps": base.spec.max_episode_steps,
+    }
+    return cfg
+@torch.no_grad()
+def evaluate_policy(agent: Agent, env_id, device, episodes, video_dir=None, seed=0):
+    env = make_evaluate_env(env_id, video_dir=video_dir, seed=seed)
+    ep_returns, ep_lengths = [], []
+    np.random.seed(seed)
+    for ep in range(episodes):
+        # updating env 
+        env.unwrapped.length = np.clip(np.random.normal(0.5, 0.4), a_min=0.1, a_max=1.0)
+        env.unwrapped.masspole = np.clip(np.random.normal(0.1, 0.05), a_min=0.01, a_max=0.3)
+        env.unwrapped.masscart = np.clip(np.random.normal(1.0, 0.5), a_min=0.1, a_max=2.0) 
+        env.unwrapped.polemass_length = env.unwrapped.masspole * env.unwrapped.length
+        env.unwrapped.total_mass = env.unwrapped.masspole + env.unwrapped.masscart
+        obs, _ = env.reset()
+        done = False
+        ret, length = 0.0, 0
+
+        while not done:
+            x = torch.tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
+            logits = agent.actor(x)
+            action = torch.argmax(logits, dim=-1).item()
+            obs, reward, done, truncated, _ = env.step(action)
+            done = done or truncated
+            ret += reward
+            length += 1
+            print(f"\r[eval] ep={ep} step={length} return={ret:.1f}", end="")
+
+        ep_returns.append(ret)
+        ep_lengths.append(length)
+        print(f"[eval] ep={ep} cfg={return_config(env)} return={ret:.1f} length={length}")
+    env.close()
+    return np.array(ep_returns), np.array(ep_lengths)
 
 
 if __name__ == "__main__":
@@ -254,13 +306,6 @@ if __name__ == "__main__":
             next_done = np.logical_or(terminations, truncations)
             rewards[step] = torch.tensor(reward, dtype=torch.float32).to(device).view(-1)
             next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(next_done).to(device)
-            # print(infos.keys())
-            if "final_info" in infos:
-                for info in infos["final_info"]:
-                    if info and "episode" in info:
-                        print(f"global_step={global_step}, episodic_return={info['episode']['r']}")
-                        writer.add_scalar("charts/episodic_return", info["episode"]["r"], global_step)
-                        writer.add_scalar("charts/episodic_length", info["episode"]["l"], global_step)
             if "episode" in infos:
                 ep = infos["episode"]
                 print(f"global_step={global_step}, episodic_return={ep['r'].max()}")
@@ -359,5 +404,7 @@ if __name__ == "__main__":
         print("SPS:", int(global_step / (time.time() - start_time)))
         writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
 
+    rets, lens = evaluate_policy(agent, "CartPoleCustom-v0", device, 6, video_dir=f"videos/{run_name}-eval", seed=args.seed+100)
+    print("eval/return_mean:", rets.mean(), "eval/len_mean:", lens.mean())
     envs.close()
     writer.close()
