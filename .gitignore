@@ -6,6 +6,8 @@ __pycache__/
 # C extensions
 *.so
 
+*/checkpoints/*
+
 # Distribution / packaging
 .Python
 build/
@@ -207,6 +209,10 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
+# cache files
+__pycache__/*
+
+
 # Marimo
 marimo/_static/
 marimo/_lsp/
@@ -217,3 +223,6 @@ __marimo__/
 
 # Logging
 wandb/
+
+
+cartPole/basicExperiments/runs/*

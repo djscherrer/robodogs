@@ -38,20 +38,18 @@ class RecurrentRolloutBuffer:
         self.masks[self.ptr] = 1.0 - float(d)
         self.ptr += 1
 
-    def compute_returns_advantages(self, gamma=0.95, lam=0.95, last_value=0.0):
+    def compute_returns_advantages(self, gamma=0.95, gae_lambda=0.95, last_value=0.0):
         T = self.ptr
-        adv = np.zeros_like(self.rewards[:T])
-        ret = np.zeros_like(self.rewards[:T])
-        lastgaelam = 0
+        adv = np.zeros(T, dtype=np.float32)
+        lastgaelam = 0.0
         for t in reversed(range(T)):
             nonterminal = 1.0 - float(self.dones[t])
             delta = self.rewards[t] + gamma * last_value * nonterminal - self.values[t]
-            lastgaelam = delta + gamma * lam * nonterminal * lastgaelam
+            lastgaelam = delta + gamma * gae_lambda * nonterminal * lastgaelam
             adv[t] = lastgaelam
             last_value = self.values[t]
-        ret = adv + self.values[:T]
         self.advantages = adv
-        self.returns = ret
+        self.returns = adv + self.values[:T]
 
     def iter_minibatches(self, batch_size, seq_len):
         # Yield random chunks of length seq_len; in practice align with episodes and meta-episodes

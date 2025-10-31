@@ -76,10 +76,12 @@ def main(args):
         sequence_length=int(hyp["sequence_length"]),
         meta_episode_length=int(hyp.get("meta_episode_length", 0)),
         batch_size=int(hyp["batch_size"]),
+        max_grad_norm=float(hyp.get("max_grad_norm", 0.5)),
+        gae_lambda=float(hyp.get("gae_lambda", 0.95)),
     ))
 
     # Global/default log‑std (policy may override by returning its own log_std)
-    action_log_std = torch.ones(act_dim, device=device) * float(hyp.get("action_log_std", -1.2040))
+    action_log_std = torch.ones(act_dim, device=device) * float(hyp.get("action_log_std"))
 
     # --- Rollout storage ---
     steps_per_update = int(hyp["n_steps"])  # transitions collected per update
@@ -87,9 +89,9 @@ def main(args):
     buf = RecurrentRolloutBuffer(steps_per_update, obs_dim, act_dim, hidden_size)
 
     # --- Seeding & init ---
-    torch.manual_seed(int(hyp.get("random_seed", 42)))
-    np.random.seed(int(hyp.get("random_seed", 42)))
-    obs, _ = env.reset(seed=int(hyp.get("random_seed", 42)))
+    torch.manual_seed(int(hyp.get("random_seed")))
+    np.random.seed(int(hyp.get("random_seed")))
+    obs, _ = env.reset(seed=int(hyp.get("random_seed")))
 
     # RNN hidden state: (num_layers=1, batch=1, hidden)
     h = torch.zeros(1, 1, hidden_size, device=device)
@@ -103,23 +105,18 @@ def main(args):
         x = torch.as_tensor(obs, dtype=torch.float32, device=device).view(1, 1, -1)
 
         with torch.no_grad():
-            out = policy(x, h)
-            if len(out) == 3:
-                mu, value, h = out
-                log_std = action_log_std.expand_as(mu)
-            elif len(out) == 4:
-                mu, log_std, value, h = out
-            else:
-                raise RuntimeError("GRUPolicy forward must return (mu, value, h) or (mu, log_std, value, h)")
+            mu, value, h = policy(x, h)
+            log_std = action_log_std.expand_as(mu)
 
             # Build tanh‑squashed Gaussian in action space
             # mu/log_std expected shaped [1, 1, act_dim]
             mu_flat = mu.squeeze(0).squeeze(0)
             log_std_flat = log_std.squeeze(0).squeeze(0)
+
             dist = TanhDiagGaussian(mu_flat, log_std_flat)
             a_t, pre_tanh, logp_t = dist.rsample()
-            action_np = a_t.detach().cpu().numpy().astype(np.float32)
 
+            action_np = a_t.detach().cpu().numpy().astype(np.float32)
             v_t = value.squeeze().detach().cpu().item()
             logp_item = logp_t.detach().cpu().item()
 
@@ -147,7 +144,10 @@ def main(args):
 
         # PPO update
         if (t + 1) % steps_per_update == 0:
-            buf.compute_returns_advantages(gamma=float(hyp["gamma"]))
+            buf.compute_returns_advantages(
+                gamma=float(hyp["gamma"]),
+                gae_lambda=float(hyp.get("gae_lambda", 0.95))
+            )
             algo.update(buf)
             buf = RecurrentRolloutBuffer(steps_per_update, obs_dim, act_dim, hidden_size)
             print(f"Trained up to step {t + 1}")

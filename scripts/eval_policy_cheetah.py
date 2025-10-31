@@ -4,7 +4,7 @@ Simple GRU policy evaluation on Gymnasium MuJoCo HalfCheetah-v4
 ----------------------------------------------------------------
 
 Matches the lean style of your other eval script: constants at top,
-`BigDevice()` for device selection, strict-ish config read, no extra
+`pick_device()` for device selection, strict-ish config read, no extra
 adapters or random policies.
 
 Usage
@@ -26,10 +26,12 @@ import torch
 from metarl.policies.gru_policy import GRUPolicy
 from metarl.envs.mujoco_cheetah_env import HalfCheetahAdapter
 
+import random
+
 # =============================
 # User-tunable constants
 # =============================
-CKPT = "checkpoints/cheetah/policy_final.pt"
+CKPT = "checkpoints/cheetah/policy_20k.pt"
 CFG  = "configs/metarl_default_cheetah.json"
 STEPS = 1000
 RENDER = True
@@ -38,7 +40,11 @@ SEED: int = 0
 # Deterministic eval: use tanh(mu). If False and your policy returns log_std,
 # we sample tanh(N(mu, std)). If policy returns only (mu, value, h), this flag
 # has no effect (we use tanh(mu) to keep actions in [-1,1]).
-DETERMINISTIC: bool = True
+DETERMINISTIC: bool = False
+
+random.seed(SEED)
+np.random.seed(SEED)
+torch.manual_seed(SEED)
 
 # If your GRUPolicy already outputs squashed actions, set this False
 APPLY_TANH_ON_MU: bool = True

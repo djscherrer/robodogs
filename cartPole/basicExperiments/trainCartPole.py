@@ -3,6 +3,8 @@ import os
 import random
 import time
 from dataclasses import dataclass
+from typing import Optional
+import wandb
 
 import gymnasium as gym
 import numpy as np
@@ -10,8 +12,9 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import tyro
-from torch.distributions.categorical import Categorical
-from torch.utils.tensorboard import SummaryWriter
+
+from gymnasium.envs.registration import register
+from cartPole.basicExperiments import cartPoleEnv, cartPoleAgent, evaluateCartPole
 
 
 @dataclass
@@ -24,11 +27,11 @@ class Args:
     """if toggled, `torch.backends.cudnn.deterministic=False`"""
     cuda: bool = False
     """if toggled, cuda will be enabled by default"""
-    track: bool = False
+    track: bool = True
     """if toggled, this experiment will be tracked with Weights and Biases"""
-    wandb_project_name: str = "cleanRL"
+    wandb_project_name: str = "robodogs-cartpole"
     """the wandb's project name"""
-    wandb_entity: str = None
+    wandb_entity: str = "robodogs"
     """the entity (team) of wandb's project"""
     capture_video: bool = True
     """whether to capture videos of the agent performances (check out `videos` folder)"""
@@ -77,84 +80,13 @@ class Args:
     num_iterations: int = 0
     """the number of iterations (computed in runtime)"""
 
-from gymnasium.envs.classic_control.cartpole import CartPoleEnv
-from gymnasium.envs.registration import register
+    # Checkpointing
+    resume: Optional[str] = None
+    """Path to a checkpoint (.pt) to resume from (e.g., checkpoints/NAME/last.pt)."""
+    save_every_episodes: int = 0
+    """If >0, also save 'last.pt' every N completed episodes (in addition to best)."""
+    global_ckpt_dir = f"cartpole/basicExperiments/checkpoints"
 
-class CartPoleCustom(CartPoleEnv):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        # # Physics knobs
-        # self.gravity = 10.0          # default 9.8
-        # self.masscart = 1.0          # default 1.0
-        self.masspole = 0.3          # default 0.1
-        self.length = 0.7            # half-length (m); default 0.5
-        # self.force_mag = 10.0        # push force; default 10.0
-        # self.tau = 0.01              # seconds between state updates
-
-        # # Recompute derived terms
-        self.total_mass = self.masspole + self.masscart
-        self.polemass_length = self.masspole * self.length
-
-
-def make_env(env_id, idx, capture_video, run_name):
-    def thunk():
-        if capture_video and idx == 0:
-            env = gym.make(env_id, render_mode="rgb_array")
-            # Apply RecordEpisodeStatistics FIRST
-            env = gym.wrappers.RecordEpisodeStatistics(env)
-            # Then apply RecordVideo SECOND
-            env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
-        else:
-            env = gym.make(env_id)
-            # Apply RecordEpisodeStatistics here as well
-            env = gym.wrappers.RecordEpisodeStatistics(env)
-        return env
-
-    return thunk
-
-
-def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
-    torch.nn.init.orthogonal_(layer.weight, std)
-    torch.nn.init.constant_(layer.bias, bias_const)
-    return layer
-
-
-class Agent(nn.Module):
-    def __init__(self, envs):
-        super().__init__()
-        self.critic = nn.Sequential(
-            layer_init(nn.Linear(np.array(envs.single_observation_space.shape).prod(), 64)),
-            nn.Tanh(),
-            layer_init(nn.Linear(64, 64)),
-            nn.Tanh(),
-            layer_init(nn.Linear(64, 1), std=1.0),
-        )
-        self.actor = nn.Sequential(
-            layer_init(nn.Linear(np.array(envs.single_observation_space.shape).prod(), 64)),
-            nn.Tanh(),
-            layer_init(nn.Linear(64, 64)),
-            nn.Tanh(),
-            layer_init(nn.Linear(64, envs.single_action_space.n), std=0.01),
-        )
-
-    def get_value(self, x):
-        return self.critic(x)
-
-    def get_action_and_value(self, x, action=None):
-        logits = self.actor(x)
-        probs = Categorical(logits=logits)
-        if action is None:
-            action = probs.sample()
-        return action, probs.log_prob(action), probs.entropy(), self.critic(x)
-
-def make_evaluate_env(env_id, video_dir=None, seed=0) -> gym.wrappers.RecordVideo | gym.wrappers.RecordEpisodeStatistics:
-    render_mode = "rgb_array" if video_dir else None
-    env = gym.make(env_id, render_mode=render_mode)
-    env = gym.wrappers.RecordEpisodeStatistics(env)
-    if video_dir:
-        env = gym.wrappers.RecordVideo(env, video_dir, episode_trigger=lambda _: True)
-    env.reset(seed=seed)
-    return env
 
 def return_config(env: gym.Env):
     base = env.unwrapped
@@ -168,37 +100,13 @@ def return_config(env: gym.Env):
         "max_episode_steps": base.spec.max_episode_steps,
     }
     return cfg
-@torch.no_grad()
-def evaluate_policy(agent: Agent, env_id, device, episodes, video_dir=None, seed=0):
-    env = make_evaluate_env(env_id, video_dir=video_dir, seed=seed)
-    ep_returns, ep_lengths = [], []
-    np.random.seed(seed)
-    for ep in range(episodes):
-        # updating env 
-        env.unwrapped.length = np.clip(np.random.normal(0.5, 0.4), a_min=0.1, a_max=1.0)
-        env.unwrapped.masspole = np.clip(np.random.normal(0.1, 0.05), a_min=0.01, a_max=0.3)
-        env.unwrapped.masscart = np.clip(np.random.normal(1.0, 0.5), a_min=0.1, a_max=2.0) 
-        env.unwrapped.polemass_length = env.unwrapped.masspole * env.unwrapped.length
-        env.unwrapped.total_mass = env.unwrapped.masspole + env.unwrapped.masscart
-        obs, _ = env.reset()
-        done = False
-        ret, length = 0.0, 0
 
-        while not done:
-            x = torch.tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
-            logits = agent.actor(x)
-            action = torch.argmax(logits, dim=-1).item()
-            obs, reward, done, truncated, _ = env.step(action)
-            done = done or truncated
-            ret += reward
-            length += 1
-            print(f"\r[eval] ep={ep} step={length} return={ret:.1f}", end="")
-
-        ep_returns.append(ret)
-        ep_lengths.append(length)
-        print(f"[eval] ep={ep} cfg={return_config(env)} return={ret:.1f} length={length}")
-    env.close()
-    return np.array(ep_returns), np.array(ep_lengths)
+def pick_device():
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
 
 
 if __name__ == "__main__":
@@ -208,28 +116,20 @@ if __name__ == "__main__":
     args.num_iterations = args.total_timesteps // args.batch_size
     run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
     register(
-        id="CartPoleCustom-v0",
-        entry_point=__name__ + ":CartPoleCustom",
+        id=args.env_id,
+        entry_point=cartPoleEnv.CartPoleCustom,
         max_episode_steps=500,
     )
 
     if args.track:
-        import wandb
-
         wandb.init(
             project=args.wandb_project_name,
-            entity=args.wandb_entity,
-            sync_tensorboard=True,
+            entity=args.wandb_entity,   # can be None on personal account
             config=vars(args),
             name=run_name,
-            monitor_gym=True,
-            save_code=True,
+            save_code=True,             # snapshot of your code
+            settings=wandb.Settings(start_method="thread")  # robust on macOS
         )
-    writer = SummaryWriter(f"runs/{run_name}")
-    writer.add_text(
-        "hyperparameters",
-        "|param|value|\n|-|-|\n%s" % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
-    )
 
     # TRY NOT TO MODIFY: seeding
     random.seed(args.seed)
@@ -237,15 +137,13 @@ if __name__ == "__main__":
     torch.manual_seed(args.seed)
     torch.backends.cudnn.deterministic = args.torch_deterministic
 
-    if torch.cuda.is_available() and args.cuda:
-        device = torch.device("cuda")
-    else:
-        device = torch.device("cpu")
+    device = pick_device()
+    device = "cpu" # ML stuff to tiny to have an impact
     print(f"Using device: {device}")
 
     # env setup
     envs = gym.vector.SyncVectorEnv(
-        [make_env(args.env_id, i, args.capture_video, run_name) for i in range(args.num_envs)],
+        [cartPoleEnv.make_env(args.env_id, i, args.capture_video, run_name) for i in range(args.num_envs)],
     )
     outer = envs.envs[0] 
     base = outer.unwrapped        # == CartPoleCustom
@@ -261,11 +159,64 @@ if __name__ == "__main__":
         "max_episode_steps": base.spec.max_episode_steps,
     }
     text = "\n".join(f"{k}: {v}" for k, v in cfg.items())
-    writer.add_text("env_cfg", text)
+
+    if args.track:
+        wandb.config.update({"env_cfg": cfg}, allow_val_change=True)
+
     assert isinstance(envs.single_action_space, gym.spaces.Discrete), "only discrete action space is supported"
 
-    agent = Agent(envs).to(device)
+    agent = cartPoleAgent.Agent(envs).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
+
+    # === Checkpoint directory & trackers ===
+    ckpt_dir = f"{args.global_ckpt_dir}/{run_name}"
+    os.makedirs(ckpt_dir, exist_ok=True)
+    best_return = -float("inf")
+    episodes_done = 0  # count completed episodes this run (for periodic saving)
+    global_update_idx = 0  # count PPO updates (outer loop iterations)
+
+    def _checkpoint_payload():
+        return {
+            "state_dict": agent.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "best_return": best_return,
+            "episodes_done": episodes_done,
+            "global_step": global_step,
+            "global_update_idx": global_update_idx,
+            "args": vars(args),
+            "rng": {
+                "python": random.getstate(),
+                "numpy": np.random.get_state(),
+                "torch": torch.get_rng_state(),
+                "torch_cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+            },
+        }
+
+    def save_last():
+        torch.save(_checkpoint_payload(), os.path.join(ckpt_dir, "last.pt"))
+
+    def save_best():
+        torch.save(_checkpoint_payload(), os.path.join(ckpt_dir, "best.pt"))
+
+    # === Resume from checkpoint if requested (AFTER agent/optimizer/helpers exist) ===
+    if args.resume is not None and os.path.isfile(args.resume):
+        ckpt = torch.load(args.resume, map_location=device)
+        agent.load_state_dict(ckpt["state_dict"])
+        if "optimizer" in ckpt and ckpt["optimizer"] is not None:
+            optimizer.load_state_dict(ckpt["optimizer"])
+        # restore trackers
+        best_return = ckpt.get("best_return", best_return)
+        episodes_done = ckpt.get("episodes_done", episodes_done)
+        global_step = ckpt.get("global_step", 0)
+        global_update_idx = ckpt.get("global_update_idx", 0)
+        # restore RNG (overrides earlier seeding; that’s okay when resuming)
+        if "rng" in ckpt:
+            random.setstate(ckpt["rng"]["python"])
+            np.random.set_state(ckpt["rng"]["numpy"])
+            torch.set_rng_state(ckpt["rng"]["torch"])
+            if torch.cuda.is_available() and ckpt["rng"]["torch_cuda"] is not None:
+                torch.cuda.set_rng_state_all(ckpt["rng"]["torch_cuda"])
+        print(f"[resume] loaded checkpoint from: {args.resume}")
 
     # ALGO Logic: Storage setup
     obs = torch.zeros((args.num_steps, args.num_envs) + envs.single_observation_space.shape).to(device)
@@ -308,9 +259,33 @@ if __name__ == "__main__":
             next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(next_done).to(device)
             if "episode" in infos:
                 ep = infos["episode"]
-                print(f"global_step={global_step}, episodic_return={ep['r'].max()}")
-                writer.add_scalar("charts/episodic_return", ep["r"].max(), global_step)
-                writer.add_scalar("charts/episodic_length", ep["l"].max(), global_step)
+                ep_r = float(ep["r"].max())
+                ep_l = int(ep["l"].max())
+                print(f"global_step={global_step}, episodic_return={ep_r}")
+
+                if args.track:
+                    wandb.log(
+                        {
+                            "charts/episodic_return": ep_r,
+                            "charts/episodic_length": ep_l,
+                            "global_step": global_step,
+                        }
+                    )
+                # === checkpointing ===
+                episodes_done += 1
+                # Always keep the rolling "last.pt"
+                save_last()
+
+                if args.save_every_episodes and (episodes_done % args.save_every_episodes == 0):
+                    save_last()
+
+                if ep_r > best_return:
+                    best_return = ep_r
+                    save_best()
+                    if args.track:
+                        wandb.log({"perf/best_return": best_return, "global_step": global_step})
+        
+
         # bootstrap value if not done
         with torch.no_grad():
             next_value = agent.get_value(next_obs).reshape(1, -1)
@@ -392,19 +367,53 @@ if __name__ == "__main__":
         var_y = np.var(y_true)
         explained_var = np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
 
-        # TRY NOT TO MODIFY: record rewards for plotting purposes
-        writer.add_scalar("charts/learning_rate", optimizer.param_groups[0]["lr"], global_step)
-        writer.add_scalar("losses/value_loss", v_loss.item(), global_step)
-        writer.add_scalar("losses/policy_loss", pg_loss.item(), global_step)
-        writer.add_scalar("losses/entropy", entropy_loss.item(), global_step)
-        writer.add_scalar("losses/old_approx_kl", old_approx_kl.item(), global_step)
-        writer.add_scalar("losses/approx_kl", approx_kl.item(), global_step)
-        writer.add_scalar("losses/clipfrac", np.mean(clipfracs), global_step)
-        writer.add_scalar("losses/explained_variance", explained_var, global_step)
+        if args.track:
+            wandb.log(
+                {
+                    "charts/learning_rate": optimizer.param_groups[0]["lr"],
+                    "losses/value_loss": float(v_loss.item()),
+                    "losses/policy_loss": float(pg_loss.item()),
+                    "losses/entropy": float(entropy_loss.item()),
+                    "losses/old_approx_kl": float(old_approx_kl.item()),
+                    "losses/approx_kl": float(approx_kl.item()),
+                    "losses/clipfrac": float(np.mean(clipfracs)),
+                    "losses/explained_variance": float(explained_var),
+                    "charts/SPS": int(global_step / (time.time() - start_time)),
+                    "global_step": global_step,
+                }
+            )
         print("SPS:", int(global_step / (time.time() - start_time)))
-        writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
 
-    rets, lens = evaluate_policy(agent, "CartPoleCustom-v0", device, 6, video_dir=f"videos/{run_name}-eval", seed=args.seed+100)
+        global_update_idx += 1
+
+    rets, lens = evaluateCartPole.evaluate_policy(agent, args.env_id, device, 6, video_dir=f"videos/{run_name}-eval", seed=args.seed+100)
     print("eval/return_mean:", rets.mean(), "eval/len_mean:", lens.mean())
+
+    # === F) Eval metrics + eval video to W&B ===
+    if args.track:
+        art = wandb.Artifact(name="cartpole-agent", type="model")
+        best_path = f"{ckpt_dir}/best.pt"
+        last_path = f"{ckpt_dir}/last.pt"
+        if os.path.exists(best_path):
+            art.add_file(best_path)
+        if os.path.exists(last_path):
+            art.add_file(last_path)
+        wandb.log_artifact(art)
+    
+        wandb.log(
+            {
+                "eval/return_mean": float(rets.mean()),
+                "eval/len_mean": float(lens.mean()),
+            }
+        )
+        # Log one short eval clip (adjust filename if needed)
+        eval_dir = f"videos/{run_name}-eval"
+        if os.path.isdir(eval_dir):
+            mp4s = sorted([f for f in os.listdir(eval_dir) if f.endswith(".mp4")])
+            if mp4s:
+                wandb.log({"eval/video": wandb.Video(os.path.join(eval_dir, mp4s[0]), fps=24, format="mp4")})
+
+        wandb.finish()
+
     envs.close()
-    writer.close()
+        

@@ -6,7 +6,7 @@
   "reward_params": {},
   "train_hyp_params": {
     "algo": "ppo_rnn",
-    "time_steps": 300000,
+    "time_steps": 100000,
 
     "num_envs": 16,
     "n_steps": 256,
@@ -17,7 +17,7 @@
 
     "learning_rate": 0.0003,
     "clip_range": 0.2,
-    "entropy_coef": 0.0001,
+    "entropy_coef": 0.5,
     "value_coef": 0.5,
     "update_epochs": 10,
 

@@ -139,7 +139,7 @@ def main(args):
             # If you have GAE(lambda), also pass lambda from config; here minimal
             buf.compute_returns_advantages(gamma=hyp["gamma"])
             algo.update(buf)  # uses policy & optimizer internally
-            buf = RecurrentRolloutBuffer(steps_per_update, obs_dim, act_dim)
+            buf = RecurrentRolloutBuffer(steps_per_update, obs_dim, act_dim, hidden_size=16)
 
             if (t + 1) % steps_per_update == 0:
                 print(f"Trained up to step {t+1}")

@@ -20,6 +20,8 @@ class PPOConfig:
     sequence_length: int = 16
     meta_episode_length: int = 5
     batch_size: int = 1024
+    gae_lambda: float = 0.95
+    max_grad_norm: float = 0.5
 
 class RecurrentPPO:
     def __init__(self, policy, cfg: PPOConfig):
@@ -33,9 +35,10 @@ class RecurrentPPO:
 
         for _ in range(self.cfg.update_epochs):
             for batch in rollouts.iter_minibatches(self.cfg.batch_size, self.cfg.sequence_length):
-                # Unpack batch and move all to the same device as the policy
+                # Unpack
                 obs, actions, returns, advantages, old_logp, masks, h0, vtargets = batch
 
+                # Move to device
                 obs = obs.to(device)
                 actions = actions.to(device)
                 returns = returns.to(device)
@@ -45,10 +48,13 @@ class RecurrentPPO:
                 h0 = h0.to(device)
                 vtargets = vtargets.to(device)
 
-                # Forward through policy to get new predictions
+                # ---- Normalize advantages (per-minibatch) ----
+                advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+
+                # Forward
                 pi, v, logp, entropy = self.policy.evaluate(obs, actions, h0)
 
-                # PPO ratio and losses
+                # PPO losses
                 ratio = torch.exp(logp - old_logp)
                 clipped = torch.clamp(ratio, 1.0 - self.cfg.clip_range, 1.0 + self.cfg.clip_range)
                 policy_loss = -torch.min(ratio * advantages, clipped * advantages).mean()
@@ -61,5 +67,5 @@ class RecurrentPPO:
                 # Optimize
                 self.opt.zero_grad(set_to_none=True)
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.policy.parameters(), 0.5)
+                torch.nn.utils.clip_grad_norm_(self.policy.parameters(), self.cfg.max_grad_norm)  # use cfg
                 self.opt.step()
