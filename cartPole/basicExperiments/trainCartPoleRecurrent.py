@@ -240,6 +240,8 @@ if __name__ == "__main__":
 
     for iteration in range(1, args.num_iterations + 1):
         # Annealing the rate if instructed to do so.
+        h_critic = torch.zeros(1, args.num_envs, 128).to(device)
+        h_actor = torch.zeros(1, args.num_envs, 128).to(device)
         if args.anneal_lr:
             frac = 1.0 - (iteration - 1.0) / args.num_iterations
             lrnow = frac * args.learning_rate
@@ -252,7 +254,7 @@ if __name__ == "__main__":
 
             # ALGO LOGIC: action logic
             with torch.no_grad():
-                action, h_critic, logprob, _, value, h_actor = agent.get_action_and_value(next_obs, h_actor)
+                action, h_critic, logprob, _, value, h_actor = agent.get_action_and_value(next_obs, h_actor=h_actor, h_critic=h_critic)
                 values[step] = value.flatten()
                 action = action.squeeze()
                 logprob = logprob.squeeze()
@@ -326,7 +328,7 @@ if __name__ == "__main__":
                 end = start + args.minibatch_size
                 mb_inds = b_inds[start:end]
 
-                _,h_actor, newlogprob, entropy, newvalue, h_critic = agent.get_action_and_value(b_obs[mb_inds], hT=None, action=b_actions.long()[mb_inds])
+                _,h_actor, newlogprob, entropy, newvalue, h_critic = agent.get_action_and_value(b_obs[mb_inds], h_actor=None, h_critic=None, action=b_actions.long()[mb_inds])
                 logratio = newlogprob - b_logprobs[mb_inds]
                 ratio = logratio.exp()
 

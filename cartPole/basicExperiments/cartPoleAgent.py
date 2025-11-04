@@ -72,15 +72,15 @@ class GRUAgent(nn.Module):
         z = self.mlp_Critic(hx)
         return z, hT
 
-    def get_action_and_value(self, x, hT=None, action=None) -> tuple:
+    def get_action_and_value(self, x, h_actor=None, h_critic=None, action=None) -> tuple:
         # Forward through GRU and MLP to get action logits
-        h_seq, h_actor = self.gru_Actor(x.unsqueeze(1), hT)
+        h_seq, h_actor = self.gru_Actor(x.unsqueeze(1), h_actor)
         hx = torch.cat([h_seq, x.unsqueeze(1)], dim=-1)
         logits = self.mlp_Actor(hx)
         probs = Categorical(logits=logits)
         if action is None:
             action = probs.sample()
-        val, h_critic = self.get_value(x, hT)
+        val, h_critic = self.get_value(x, h_critic)
         return action, h_actor, probs.log_prob(action), probs.entropy(), val, h_critic
 
 
