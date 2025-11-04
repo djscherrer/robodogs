@@ -386,7 +386,7 @@ if __name__ == "__main__":
 
         global_update_idx += 1
 
-    rets, lens = evaluateCartPole.evaluate_policy(agent, args.env_id, device, 6, video_dir=f"videos/{run_name}-eval", seed=args.seed+100)
+    rets, lens = evaluateCartPole.evaluate_on_fixed_scenarios(agent, args.env_id, device, 6, video_dir=f"videos/{run_name}-eval", seed=args.seed+100)
     print("eval/return_mean:", rets.mean(), "eval/len_mean:", lens.mean())
 
     # === F) Eval metrics + eval video to W&B ===
