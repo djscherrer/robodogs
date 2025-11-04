@@ -17,3 +17,8 @@ dependencies = [
   "pydantic",
   "matplotlib",
 ]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["metarl*", "cartPole*"]
+exclude = ["configs*", "models*", "checkpoints*"]
