@@ -307,7 +307,7 @@ if __name__ == "__main__":
 
         # bootstrap value if not done
         with torch.no_grad():
-            next_value = agent.get_value(next_obs)[0].reshape(1, -1)
+            next_value = agent.get_value(next_obs)[0].view(-1)
             advantages = torch.zeros_like(rewards).to(device)
             lastgaelam = 0
             for t in reversed(range(args.num_steps)):
@@ -461,9 +461,6 @@ if __name__ == "__main__":
                 loss.backward()
                 nn.utils.clip_grad_norm_(agent.parameters(), args.max_grad_norm)
                 optimizer.step()
-
-
-
 
             if args.target_kl is not None and approx_kl > args.target_kl:
                 break
