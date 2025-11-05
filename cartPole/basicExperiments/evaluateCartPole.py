@@ -43,7 +43,7 @@ def return_config(env: gym.Env) -> Dict[str, float]:
 
 @torch.no_grad()
 def eval_one_config(
-    agent: Agent,
+    agent,
     env_id: str,
     device: torch.device | str,
     episodes: int,
@@ -51,32 +51,80 @@ def eval_one_config(
     video_dir: Optional[str] = None,
     seed: int = 0,
     verbose: bool = False,
+    greedy: bool = True,           # True = argmax, False = sample
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Evaluate on a single (optionally provided) env config for `episodes` episodes.
-    If `cfg` is None, uses the env's default physics.
+    Supports both feed-forward Agent and GRUAgent (recurrent).
     """
     env = make_evaluate_env(env_id, video_dir=video_dir, seed=seed)
     ep_returns, ep_lengths = [], []
     rs = np.random.RandomState(seed)
 
+    # detect recurrent agent (has GRU modules or get_action_and_value with h_* args)
+    is_recurrent = any(
+        hasattr(agent, attr) for attr in ("gru_Actor", "gru_Critic")
+    )
+
+    # pick device for internal tensors
+    agent_device = next(agent.parameters()).device if isinstance(agent, torch.nn.Module) else torch.device(device)
+
+    # get hidden size if recurrent (fallback 128)
+    hidden_size = getattr(agent, "hidden_size", 128)
+
     for ep in range(episodes):
-        # Apply config (fixed over the whole episode)
+        # reset env, THEN apply custom physics (safer if reset re-derives params)
+        obs, _ = env.reset(seed=int(rs.randint(0, 2**31 - 1)))
         if cfg is not None:
             apply_config(env, cfg)
 
-        obs, _ = env.reset(seed=int(rs.randint(0, 2**31 - 1)))
         done = False
         ret, length = 0.0, 0
 
+        # init recurrent state per episode
+        if is_recurrent:
+            h_a = torch.zeros(1, 1, hidden_size, device=agent_device)
+            h_c = torch.zeros(1, 1, hidden_size, device=agent_device)
+
         while not done:
-            x = torch.tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
-            logits = agent.actor(x)
-            action = torch.argmax(logits, dim=-1).item()
-            obs, reward, terminated, truncated, _ = env.step(action)
+            x = torch.tensor(obs, dtype=torch.float32, device=agent_device).unsqueeze(0)  # [1, obs]
+
+            if is_recurrent:
+                # --- Recurrent forward (greedy or stochastic) ---
+                # Actor pass
+                h_seq_a, h_a = agent.gru_Actor(x.unsqueeze(1), h_a)                    # [1,1,H], [1,1,H]
+                logits = agent.mlp_Actor(torch.cat([h_seq_a.squeeze(1), x], dim=-1))   # [1, A]
+                if greedy:
+                    action = torch.argmax(logits, dim=-1)                               # [1]
+                else:
+                    action = Categorical(logits=logits).sample()                        # [1]
+
+                # Critic pass (optional here, but cheap + consistent)
+                h_seq_c, h_c = agent.gru_Critic(x.unsqueeze(1), h_c)
+                _ = agent.mlp_Critic(torch.cat([h_seq_c.squeeze(1), x], dim=-1))       # [1, 1] (unused)
+
+                a = int(action.item())
+
+            else:
+                # --- Feed-forward policy ---
+                if hasattr(agent, "actor"):
+                    logits = agent.actor(x)                                             # [1, A]
+                    a = int(torch.argmax(logits, dim=-1).item()) if greedy else int(Categorical(logits=logits).sample().item())
+                else:
+                    # fallback: use the generic API if present
+                    a, *_ = agent.get_action_and_value(x)
+                    a = int(a.item())
+
+            obs, reward, terminated, truncated, _ = env.step(a)
             done = bool(terminated or truncated)
             ret += reward
             length += 1
+
+            if is_recurrent and done:
+                # reset hidden states between episodes
+                h_a.zero_()
+                h_c.zero_()
+
             if verbose:
                 print(f"\r[eval] ep={ep} step={length} return={ret:.1f}", end="")
 

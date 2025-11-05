@@ -307,7 +307,8 @@ if __name__ == "__main__":
 
         # bootstrap value if not done
         with torch.no_grad():
-            next_value = agent.get_value(next_obs)[0].view(-1)
+            next_value, _ = agent.get_value(next_obs, h_critic)   # h_critic from the last env step (after masking dones)
+            next_value = next_value.view(-1)
             advantages = torch.zeros_like(rewards).to(device)
             lastgaelam = 0
             for t in reversed(range(args.num_steps)):
