@@ -27,7 +27,7 @@ class Args:
     """if toggled, `torch.backends.cudnn.deterministic=False`"""
     cuda: bool = False
     """if toggled, cuda will be enabled by default"""
-    track: bool = True
+    track: bool = False
     """if toggled, this experiment will be tracked with Weights and Biases"""
     wandb_project_name: str = "robodogs-cartpole"
     """the wandb's project name"""

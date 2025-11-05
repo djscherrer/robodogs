@@ -27,11 +27,11 @@ class Args:
     """if toggled, `torch.backends.cudnn.deterministic=False`"""
     cuda: bool = False
     """if toggled, cuda will be enabled by default"""
-    track: bool = False
+    track: bool = True
     """if toggled, this experiment will be tracked with Weights and Biases"""
     wandb_project_name: str = "robodogs-cartpole"
     """the wandb's project name"""
-    wandb_entity: str = "robodogs"
+    wandb_entity: str = None #"robodogs"
     """the entity (team) of wandb's project"""
     capture_video: bool = True
     """whether to capture videos of the agent performances (check out `videos` folder)"""
@@ -129,7 +129,7 @@ if __name__ == "__main__":
             name=run_name,
             save_code=True,             # snapshot of your code
             settings=wandb.Settings(start_method="thread"),  # robust on macOS
-            mode="offline",
+            mode="online",
         )
 
     # TRY NOT TO MODIFY: seeding
@@ -226,6 +226,10 @@ if __name__ == "__main__":
     rewards = torch.zeros((args.num_steps, args.num_envs)).to(device)
     dones = torch.zeros((args.num_steps, args.num_envs)).to(device)
     values = torch.zeros((args.num_steps, args.num_envs)).to(device)
+    H = 128  # GRU hidden size
+    h0_actor_buf  = torch.zeros((args.num_steps, args.num_envs, H), device=device)
+    h0_critic_buf = torch.zeros((args.num_steps, args.num_envs, H), device=device)
+
 
     # hidden states for GRU
     h_critic = torch.zeros(1, args.num_envs, 128).to(device)
@@ -240,8 +244,8 @@ if __name__ == "__main__":
 
     for iteration in range(1, args.num_iterations + 1):
         # Annealing the rate if instructed to do so.
-        h_critic = torch.zeros(1, args.num_envs, 128).to(device)
-        h_actor = torch.zeros(1, args.num_envs, 128).to(device)
+        # h_critic = torch.zeros(1, args.num_envs, 128).to(device)
+        # h_actor = torch.zeros(1, args.num_envs, 128).to(device)
         if args.anneal_lr:
             frac = 1.0 - (iteration - 1.0) / args.num_iterations
             lrnow = frac * args.learning_rate
@@ -253,6 +257,8 @@ if __name__ == "__main__":
             dones[step] = next_done
 
             # ALGO LOGIC: action logic
+            h0_actor_buf[step]  = h_actor.squeeze(0)   # [B,H]
+            h0_critic_buf[step] = h_critic.squeeze(0)  # [B,H]
             with torch.no_grad():
                 action, h_critic, logprob, _, value, h_actor = agent.get_action_and_value(next_obs, h_actor=h_actor, h_critic=h_critic)
                 values[step] = value.flatten()
@@ -260,10 +266,14 @@ if __name__ == "__main__":
                 logprob = logprob.squeeze()
             actions[step] = action
             logprobs[step] = logprob
+            
 
             # TRY NOT TO MODIFY: execute the game and log data.
             next_obs, reward, terminations, truncations, infos = envs.step(action.cpu().numpy())
             next_done = np.logical_or(terminations, truncations)
+            done_mask = torch.as_tensor(next_done, device=device, dtype=torch.bool)
+            h_actor[:, done_mask] = 0
+            h_critic[:, done_mask] = 0
             rewards[step] = torch.tensor(reward, dtype=torch.float32).to(device).view(-1)
             next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(next_done).to(device)
             if "episode" in infos:
@@ -320,54 +330,136 @@ if __name__ == "__main__":
         b_values = values.reshape(-1)
 
         # Optimizing the policy and value network
-        b_inds = np.arange(args.batch_size)
+        # b_inds = np.arange(args.batch_size)
+        # clipfracs = []
+        # for epoch in range(args.update_epochs):
+        #     np.random.shuffle(b_inds)
+        #     h_a = torch.zeros(1, 128, 128).to(device)
+        #     h_c = torch.zeros(1, 128, 128).to(device)
+        #     for start in range(0, args.batch_size, args.minibatch_size):
+        #         end = start + args.minibatch_size
+        #         mb_inds = b_inds[start:end]
+        #         mb = b_inds[start:start+args.minibatch_size]
+        #         h_a = torch.zeros(1, len(mb), 128, device=device)
+        #         h_c = torch.zeros(1, len(mb), 128, device=device)
+        #         _, _, newlogprob, entropy, newvalue, _ = agent.get_action_and_value(
+        #             b_obs[mb], h_actor=h_a, h_critic=h_c, action=b_actions.long()[mb]
+        #         )
+        #         logratio = newlogprob - b_logprobs[mb_inds]
+        #         ratio = logratio.exp()
+
+        #         with torch.no_grad():
+        #             old_approx_kl = (-logratio).mean()
+        #             approx_kl = ((ratio - 1) - logratio).mean()
+        #             clipfracs += [((ratio - 1.0).abs() > args.clip_coef).float().mean().item()]
+
+        #         mb_advantages = b_advantages[mb_inds]
+        #         if args.norm_adv:
+        #             mb_advantages = (mb_advantages - mb_advantages.mean()) / (mb_advantages.std() + 1e-8)
+
+        #         # Policy loss
+        #         pg_loss1 = -mb_advantages * ratio
+        #         pg_loss2 = -mb_advantages * torch.clamp(ratio, 1 - args.clip_coef, 1 + args.clip_coef)
+        #         pg_loss = torch.max(pg_loss1, pg_loss2).mean()
+
+        #         # Value loss
+        #         newvalue = newvalue.view(-1)
+        #         if args.clip_vloss:
+        #             v_loss_unclipped = (newvalue - b_returns[mb_inds]) ** 2
+        #             v_clipped = b_values[mb_inds] + torch.clamp(
+        #                 newvalue - b_values[mb_inds],
+        #                 -args.clip_coef,
+        #                 args.clip_coef,
+        #             )
+        #             v_loss_clipped = (v_clipped - b_returns[mb_inds]) ** 2
+        #             v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
+        #             v_loss = 0.5 * v_loss_max.mean()
+        #         else:
+        #             v_loss = 0.5 * ((newvalue - b_returns[mb_inds]) ** 2).mean()
+
+        #         entropy_loss = entropy.mean()
+        #         loss = pg_loss - args.ent_coef * entropy_loss + v_loss * args.vf_coef
+
+        #         optimizer.zero_grad()
+        #         loss.backward()
+        #         nn.utils.clip_grad_norm_(agent.parameters(), args.max_grad_norm)
+        #         optimizer.step()
+            # assume obs, actions, logprobs, values, rewards, dones are [T, B, ...]
+        T, B = args.num_steps, args.num_envs
+        env_inds = np.arange(B)
+        np.random.shuffle(env_inds)
+        mb_envs_per_batch = B // args.num_minibatches
         clipfracs = []
+
         for epoch in range(args.update_epochs):
-            np.random.shuffle(b_inds)
-            for start in range(0, args.batch_size, args.minibatch_size):
-                end = start + args.minibatch_size
-                mb_inds = b_inds[start:end]
+            for start in range(0, B, mb_envs_per_batch):
+                mb_envs = env_inds[start:start + mb_envs_per_batch]        # [M]
+                # slice sequences [T,M,...]
+                seq_obs     = obs[:, mb_envs]                               # [T,M,obs_dim]
+                seq_actions = actions[:, mb_envs].long()                     # [T,M]
+                seq_oldlp   = logprobs[:, mb_envs]                           # [T,M]
+                seq_returns = returns[:, mb_envs]                            # [T,M]
+                seq_adv     = advantages[:, mb_envs]                         # [T,M]
+                seq_dones   = dones[:, mb_envs]                              # [T,M]  # 1 if episode just ended before this step
+                seq_oldV    = values.view(T, B)[:, mb_envs]                  # [T,M]  # for value clipping
 
-                _,h_actor, newlogprob, entropy, newvalue, h_critic = agent.get_action_and_value(b_obs[mb_inds], h_actor=None, h_critic=None, action=b_actions.long()[mb_inds])
-                logratio = newlogprob - b_logprobs[mb_inds]
+                # initial hidden = rollout snapshot at t=0 for these envs
+                h_a = h0_actor_buf[0, mb_envs].detach().unsqueeze(0).contiguous()   # [1,M,H]
+                h_c = h0_critic_buf[0, mb_envs].detach().unsqueeze(0).contiguous()  # [1,M,H]
+
+                newlp_list, newv_list, ent_list = [], [], []
+                for t in range(T):
+                    if t > 0:
+                        mask = (seq_dones[t] > 0.5)                                 # reset at step t where done==1 entering t
+                        if mask.any():
+                            h_a[:, mask] = 0
+                            h_c[:, mask] = 0
+
+                    _, h_a, lp_t, ent_t, v_t, h_c = agent.get_action_and_value(
+                        seq_obs[t], h_actor=h_a, h_critic=h_c, action=seq_actions[t]
+                    )
+                    newlp_list.append(lp_t.view(-1))           # [M]
+                    newv_list.append(v_t.view(-1))             # [M]
+                    ent_list.append(ent_t.view(-1))            # [M]
+
+                newlogprob = torch.stack(newlp_list, dim=0)    # [T,M]
+                newvalue   = torch.stack(newv_list, dim=0)     # [T,M]
+                entropy    = torch.stack(ent_list, dim=0)      # [T,M]
+
+                logratio = newlogprob - seq_oldlp              # [T,M]
                 ratio = logratio.exp()
-
                 with torch.no_grad():
                     old_approx_kl = (-logratio).mean()
                     approx_kl = ((ratio - 1) - logratio).mean()
                     clipfracs += [((ratio - 1.0).abs() > args.clip_coef).float().mean().item()]
 
-                mb_advantages = b_advantages[mb_inds]
+                adv = seq_adv
                 if args.norm_adv:
-                    mb_advantages = (mb_advantages - mb_advantages.mean()) / (mb_advantages.std() + 1e-8)
+                    adv = (adv - adv.mean()) / (adv.std() + 1e-8)
 
-                # Policy loss
-                pg_loss1 = -mb_advantages * ratio
-                pg_loss2 = -mb_advantages * torch.clamp(ratio, 1 - args.clip_coef, 1 + args.clip_coef)
+                # policy loss
+                pg_loss1 = -adv * ratio
+                pg_loss2 = -adv * torch.clamp(ratio, 1 - args.clip_coef, 1 + args.clip_coef)
                 pg_loss = torch.max(pg_loss1, pg_loss2).mean()
 
-                # Value loss
-                newvalue = newvalue.view(-1)
+                # value loss with proper old-value indexing
                 if args.clip_vloss:
-                    v_loss_unclipped = (newvalue - b_returns[mb_inds]) ** 2
-                    v_clipped = b_values[mb_inds] + torch.clamp(
-                        newvalue - b_values[mb_inds],
-                        -args.clip_coef,
-                        args.clip_coef,
-                    )
-                    v_loss_clipped = (v_clipped - b_returns[mb_inds]) ** 2
-                    v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
-                    v_loss = 0.5 * v_loss_max.mean()
+                    v_unclipped = (newvalue - seq_returns).pow(2)
+                    v_clipped = seq_oldV + torch.clamp(newvalue - seq_oldV, -args.clip_coef, args.clip_coef)
+                    v_loss = 0.5 * torch.max(v_unclipped, (v_clipped - seq_returns).pow(2)).mean()
                 else:
-                    v_loss = 0.5 * ((newvalue - b_returns[mb_inds]) ** 2).mean()
+                    v_loss = 0.5 * (newvalue - seq_returns).pow(2).mean()
 
                 entropy_loss = entropy.mean()
-                loss = pg_loss - args.ent_coef * entropy_loss + v_loss * args.vf_coef
+                loss = pg_loss - args.ent_coef * entropy_loss + args.vf_coef * v_loss
 
                 optimizer.zero_grad()
                 loss.backward()
                 nn.utils.clip_grad_norm_(agent.parameters(), args.max_grad_norm)
                 optimizer.step()
+
+
+
 
             if args.target_kl is not None and approx_kl > args.target_kl:
                 break
@@ -395,7 +487,7 @@ if __name__ == "__main__":
 
         global_update_idx += 1
 
-    rets, lens = evaluateCartPole.evaluate_on_fixed_scenarios(agent, args.env_id, device, 6, video_dir=f"videos/{run_name}-eval", seed=args.seed+100)
+    rets, lens = evaluateCartPole.evaluate_on_fixed_scenarios(agent, args.env_id, device, 6, video_root=f"videos/{run_name}-eval", seed=args.seed+100)
     print("eval/return_mean:", rets.mean(), "eval/len_mean:", lens.mean())
 
     # === F) Eval metrics + eval video to W&B ===
