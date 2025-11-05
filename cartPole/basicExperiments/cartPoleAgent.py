@@ -69,14 +69,14 @@ class GRUAgent(nn.Module):
         # Forward through GRU and MLP to get state value
         h_seq, hT = self.gru_Critic(x.unsqueeze(1), hx)
 
-        hx = torch.cat([h_seq, x.unsqueeze(1)], dim=-1)
+        hx = torch.cat([h_seq.squeeze(1), x], dim=-1)
         z = self.mlp_Critic(hx)
         return z, hT
 
     def get_action_and_value(self, x, h_actor=None, h_critic=None, action=None) -> tuple:
         # Forward through GRU and MLP to get action logits
         h_seq, h_actor = self.gru_Actor(x.unsqueeze(1), h_actor)
-        hx = torch.cat([h_seq, x.unsqueeze(1)], dim=-1)
+        hx = torch.cat([h_seq.squeeze(1), x], dim=-1)
         logits = self.mlp_Actor(hx)
         probs = Categorical(logits=logits)
         if action is None:

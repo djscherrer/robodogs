@@ -260,10 +260,10 @@ if __name__ == "__main__":
             h0_actor_buf[step]  = h_actor.squeeze(0)   # [B,H]
             h0_critic_buf[step] = h_critic.squeeze(0)  # [B,H]
             with torch.no_grad():
-                action, h_critic, logprob, _, value, h_actor = agent.get_action_and_value(next_obs, h_actor=h_actor, h_critic=h_critic)
+                action, h_actor, logprob, _, value, h_critic = agent.get_action_and_value(next_obs, h_actor=h_actor, h_critic=h_critic)
                 values[step] = value.flatten()
-                action = action.squeeze()
-                logprob = logprob.squeeze()
+                # action = action.squeeze()
+                # logprob = logprob.squeeze()
             actions[step] = action
             logprobs[step] = logprob
             

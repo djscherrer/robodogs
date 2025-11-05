@@ -27,11 +27,11 @@ class Args:
     """if toggled, `torch.backends.cudnn.deterministic=False`"""
     cuda: bool = False
     """if toggled, cuda will be enabled by default"""
-    track: bool = False
+    track: bool = True
     """if toggled, this experiment will be tracked with Weights and Biases"""
-    wandb_project_name: str = "robodogs-cartpole"
+    wandb_project_name: str = "robodogs-cartpole-Non-Recurrent"
     """the wandb's project name"""
-    wandb_entity: str = "robodogs"
+    wandb_entity: str = None
     """the entity (team) of wandb's project"""
     capture_video: bool = True
     """whether to capture videos of the agent performances (check out `videos` folder)"""
@@ -248,8 +248,8 @@ if __name__ == "__main__":
             # ALGO LOGIC: action logic
             with torch.no_grad():
                 action, h_critic, logprob, _, value, h_actor = agent.get_action_and_value(next_obs, h_actor=None, h_critic=None)
-                action = action.squeeze()
-                logprob = logprob.squeeze()
+                # action = action.squeeze()
+                # logprob = logprob.squeeze()
                 values[step] = value.flatten()
             actions[step] = action
             logprobs[step] = logprob
@@ -388,7 +388,7 @@ if __name__ == "__main__":
 
         global_update_idx += 1
 
-    rets, lens = evaluateCartPole.evaluate_on_fixed_scenarios(agent, args.env_id, device, 6, video_dir=f"videos/{run_name}-eval", seed=args.seed+100)
+    rets, lens = evaluateCartPole.evaluate_on_fixed_scenarios(agent, args.env_id, device, 6, video_root=f"videos/{run_name}-eval", seed=args.seed+100)
     print("eval/return_mean:", rets.mean(), "eval/len_mean:", lens.mean())
 
     # === F) Eval metrics + eval video to W&B ===
