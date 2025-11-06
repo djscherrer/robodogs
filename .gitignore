@@ -224,5 +224,11 @@ __marimo__/
 # Logging
 wandb/
 
+# Videos
+videos/    
+
+# Checkpoints
+basicExperiments/cartPole/checkpoints/
+basicExperiments/halfCheetah/checkpoints/
 
 cartPole/basicExperiments/runs/*
