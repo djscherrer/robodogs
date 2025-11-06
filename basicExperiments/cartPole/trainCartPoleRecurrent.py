@@ -31,7 +31,7 @@ class Args:
     """if toggled, this experiment will be tracked with Weights and Biases"""
     wandb_project_name: str = "robodogs-cartpole"
     """the wandb's project name"""
-    wandb_entity: str = None #"robodogs"
+    wandb_entity: str = "robodogs"
     """the entity (team) of wandb's project"""
     capture_video: bool = True
     """whether to capture videos of the agent performances (check out `videos` folder)"""
