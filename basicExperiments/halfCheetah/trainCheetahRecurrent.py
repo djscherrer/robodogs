@@ -13,6 +13,7 @@ import torch.nn as nn
 import torch.optim as optim
 import tyro
 
+from gymnasium.vector import AsyncVectorEnv
 from gymnasium.envs.registration import register
 from . import cheetahAgent, cheetahEnv, evaluateCheetah
 
@@ -104,7 +105,7 @@ def pick_device():
     if torch.cuda.is_available():
         return torch.device("cuda")
     if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        return torch.device("mps")
+        return torch.device("cpu") #NOTE: change to mps if RL stuff gets large
     return torch.device("cpu")
 
 
@@ -142,25 +143,40 @@ if __name__ == "__main__":
     print(f"Using device: {device}")
 
     # env setup
-    envs = gym.vector.SyncVectorEnv(
-        [cheetahEnv.make_env(args.env_id, i, args.capture_video, run_name) for i in range(args.num_envs)],
-    )
-    outer = envs.envs[0]
-    base = outer.unwrapped        # == CheetahCustom
+    env_fns = [
+        cheetahEnv.make_env(args.env_id, i, args.capture_video, run_name)
+        for i in range(args.num_envs)
+    ]
 
+    has_cuda = torch.cuda.is_available()
+    has_mps = hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+    # Default: mac -> sync; linux+cuda -> async; otherwise sync
+    prefer = "sync" if has_mps else ("async" if has_cuda else "sync")
+
+    if prefer == "async":
+        envs = AsyncVectorEnv(env_fns, shared_memory=False, context="spawn")
+    else:
+        envs = gym.vector.SyncVectorEnv(env_fns)
+
+    # Query attributes from worker 0
     sp = envs.single_observation_space
     ac = envs.single_action_space
 
+    # Safely pull per-env attributes from worker 0
+    specs       = envs.get_attr("spec")          # list length = num_envs
+    frame_skips = envs.get_attr("frame_skip")    # list
+    dts         = envs.get_attr("dt")            # list (if your env defines .dt)
+
+    spec0        = specs[0]
+    frame_skip0  = frame_skips[0] if frame_skips else None
+    dt0          = dts[0] if dts else None
+
     cfg = {
         "env_id": args.env_id,
-        #"obs_shape": tuple(sp.shape),                      # e.g. (17,)
-        #"act_shape": tuple(ac.shape),                      # e.g. (6,)
-        #"act_low": float(np.min(ac.low)),
-        #"act_high": float(np.max(ac.high)),
-        "dt": getattr(base, "dt", None),                   # MuJoCo sim timestep * frame_skip
-        "frame_skip": getattr(base, "frame_skip", None),
-        "render_fps": (int(round(1.0 / base.dt)) if hasattr(base, "dt") else None),
-        "max_episode_steps": (base.spec.max_episode_steps if getattr(base, "spec", None) else None),
+        "dt": dt0,
+        "frame_skip": frame_skip0,
+        "render_fps": (int(round(1.0 / dt0)) if dt0 else None),
+        "max_episode_steps": (spec0.max_episode_steps if spec0 else None),
     }
     text = "\n".join(f"{k}: {v}" for k, v in cfg.items())
 

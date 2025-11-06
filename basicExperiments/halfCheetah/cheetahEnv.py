@@ -156,7 +156,7 @@ class CheetahCustom(HalfCheetahEnv):
 def make_env(env_id: str, idx: int, capture_video: bool, run_name: str):
     def thunk():
         rm = "rgb_array" if (capture_video and idx == 0) else None
-        env = gym.make(env_id, render_mode=rm)
+        env = CheetahCustom(render_mode=rm)
         env = gym.wrappers.RecordEpisodeStatistics(env)
         if capture_video and idx == 0:
             # record every episode from env #0
