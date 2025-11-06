@@ -39,13 +39,13 @@ class Args:
     # Algorithm specific arguments
     env_id: str = "HalfCheetahCustom-v5"
     """the id of the environment"""
-    total_timesteps: int = 500
+    total_timesteps: int = 20000000
     """total timesteps of the experiments"""
     learning_rate: float = 2.5e-4
     """the learning rate of the optimizer"""
-    num_envs: int = 4
+    num_envs: int = 32
     """the number of parallel game environments"""
-    num_steps: int = 1024
+    num_steps: int = 256
     """the number of steps to run in each environment per policy rollout"""
     anneal_lr: bool = True
     """Toggle learning rate annealing for policy and value networks"""
@@ -138,7 +138,7 @@ if __name__ == "__main__":
     torch.backends.cudnn.deterministic = args.torch_deterministic
 
     device = pick_device()
-    device = "cpu" # ML stuff to tiny to have an impact 
+    #device = "cpu" # ML stuff to tiny to have an impact 
     print(f"Using device: {device}")
 
     # env setup
@@ -333,61 +333,6 @@ if __name__ == "__main__":
         b_values = values.reshape(-1)
 
         # Optimizing the policy and value network
-        # b_inds = np.arange(args.batch_size)
-        # clipfracs = []
-        # for epoch in range(args.update_epochs):
-        #     np.random.shuffle(b_inds)
-        #     h_a = torch.zeros(1, 128, 128).to(device)
-        #     h_c = torch.zeros(1, 128, 128).to(device)
-        #     for start in range(0, args.batch_size, args.minibatch_size):
-        #         end = start + args.minibatch_size
-        #         mb_inds = b_inds[start:end]
-        #         mb = b_inds[start:start+args.minibatch_size]
-        #         h_a = torch.zeros(1, len(mb), 128, device=device)
-        #         h_c = torch.zeros(1, len(mb), 128, device=device)
-        #         _, _, newlogprob, entropy, newvalue, _ = agent.get_action_and_value(
-        #             b_obs[mb], h_actor=h_a, h_critic=h_c, action=b_actions.long()[mb]
-        #         )
-        #         logratio = newlogprob - b_logprobs[mb_inds]
-        #         ratio = logratio.exp()
-
-        #         with torch.no_grad():
-        #             old_approx_kl = (-logratio).mean()
-        #             approx_kl = ((ratio - 1) - logratio).mean()
-        #             clipfracs += [((ratio - 1.0).abs() > args.clip_coef).float().mean().item()]
-
-        #         mb_advantages = b_advantages[mb_inds]
-        #         if args.norm_adv:
-        #             mb_advantages = (mb_advantages - mb_advantages.mean()) / (mb_advantages.std() + 1e-8)
-
-        #         # Policy loss
-        #         pg_loss1 = -mb_advantages * ratio
-        #         pg_loss2 = -mb_advantages * torch.clamp(ratio, 1 - args.clip_coef, 1 + args.clip_coef)
-        #         pg_loss = torch.max(pg_loss1, pg_loss2).mean()
-
-        #         # Value loss
-        #         newvalue = newvalue.view(-1)
-        #         if args.clip_vloss:
-        #             v_loss_unclipped = (newvalue - b_returns[mb_inds]) ** 2
-        #             v_clipped = b_values[mb_inds] + torch.clamp(
-        #                 newvalue - b_values[mb_inds],
-        #                 -args.clip_coef,
-        #                 args.clip_coef,
-        #             )
-        #             v_loss_clipped = (v_clipped - b_returns[mb_inds]) ** 2
-        #             v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
-        #             v_loss = 0.5 * v_loss_max.mean()
-        #         else:
-        #             v_loss = 0.5 * ((newvalue - b_returns[mb_inds]) ** 2).mean()
-
-        #         entropy_loss = entropy.mean()
-        #         loss = pg_loss - args.ent_coef * entropy_loss + v_loss * args.vf_coef
-
-        #         optimizer.zero_grad()
-        #         loss.backward()
-        #         nn.utils.clip_grad_norm_(agent.parameters(), args.max_grad_norm)
-        #         optimizer.step()
-            # assume obs, actions, logprobs, values, rewards, dones are [T, B, ...]
         T, B = args.num_steps, args.num_envs
         env_inds = np.arange(B)
         np.random.shuffle(env_inds)
