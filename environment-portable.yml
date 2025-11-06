@@ -1,0 +1,10 @@
+name: robodogs
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - ipykernel
+  - tensorboard
+  - tyro
+  - gymnasium
+  - wandb
