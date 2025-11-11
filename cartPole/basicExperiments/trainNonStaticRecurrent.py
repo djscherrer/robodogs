@@ -39,11 +39,11 @@ class Args:
     # Algorithm specific arguments
     env_id: str = "CartPoleDomainRand-v0"
     """the id of the environment"""
-    total_timesteps: int = 500000
+    total_timesteps: int = 4000000
     """total timesteps of the experiments"""
-    learning_rate: float = 2.5e-4
+    learning_rate: float = 2.5e-3
     """the learning rate of the optimizer"""
-    num_envs: int = 4
+    num_envs: int = 512
     """the number of parallel game environments"""
     num_steps: int = 128
     """the number of steps to run in each environment per policy rollout"""
@@ -71,6 +71,11 @@ class Args:
     """the maximum norm for the gradient clipping"""
     target_kl: float = None
     """the target KL divergence threshold"""
+    hidden_size: int = 32
+    """the hidden size of the GRU"""
+    mlp_hidden: int = 16
+    """the hidden size of the MLP"""
+ 
 
     # to be filled in runtime
     batch_size: int = 0
@@ -173,7 +178,7 @@ if __name__ == "__main__":
 
     assert isinstance(envs.single_action_space, gym.spaces.Discrete), "only discrete action space is supported"
     # GRU Agent init
-    agent = cartPoleAgent.GRUAgent(envs).to(device)
+    agent = cartPoleAgent.GRUAgent(envs, hidden_size=args.hidden_size, mlp_hidden=args.mlp_hidden).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
 
     # === Checkpoint directory & trackers ===
@@ -233,14 +238,14 @@ if __name__ == "__main__":
     rewards = torch.zeros((args.num_steps, args.num_envs)).to(device)
     dones = torch.zeros((args.num_steps, args.num_envs)).to(device)
     values = torch.zeros((args.num_steps, args.num_envs)).to(device)
-    H = 128  # GRU hidden size
+    H = args.hidden_size  # GRU hidden size
     h0_actor_buf  = torch.zeros((args.num_steps, args.num_envs, H), device=device)
     h0_critic_buf = torch.zeros((args.num_steps, args.num_envs, H), device=device)
 
 
     # hidden states for GRU
-    h_critic = torch.zeros(1, args.num_envs, 128).to(device)
-    h_actor = torch.zeros(1, args.num_envs, 128).to(device)
+    h_critic = torch.zeros(1, args.num_envs, H).to(device)
+    h_actor = torch.zeros(1, args.num_envs, H).to(device)
 
     # TRY NOT TO MODIFY: start the game
     global_step = 0
@@ -407,13 +412,14 @@ if __name__ == "__main__":
                 seq_oldlp   = logprobs[:, mb_envs]                           # [T,M]
                 seq_returns = returns[:, mb_envs]                            # [T,M]
                 seq_adv     = advantages[:, mb_envs]                         # [T,M]
-                seq_dones   = dones[:, mb_envs]                              # [T,M]  # 1 if episode just ended before this step
-                seq_oldV    = values.view(T, B)[:, mb_envs]                  # [T,M]  # for value clipping
+                seq_dones   = dones[:, mb_envs]                              # [T,M]  
+                seq_oldV    = values.view(T, B)[:, mb_envs]                  # [T,M] 
 
                 # initial hidden = rollout snapshot at t=0 for these envs
-                h_a = h0_actor_buf[0, mb_envs].detach().unsqueeze(0).contiguous()   # [1,M,H]
-                h_c = h0_critic_buf[0, mb_envs].detach().unsqueeze(0).contiguous()  # [1,M,H]
-
+                # h_a = h0_actor_buf[0, mb_envs].detach().unsqueeze(0).contiguous()   # [1,M,H]
+                # h_c = h0_critic_buf[0, mb_envs].detach().unsqueeze(0).contiguous()  # [1,M,H]
+                h_a = torch.zeros(1,mb_envs_per_batch,H, device=device)
+                h_c = torch.zeros(1,mb_envs_per_batch,H, device=device)
                 newlp_list, newv_list, ent_list = [], [], []
                 for t in range(T):
                     if t > 0:
@@ -495,8 +501,8 @@ if __name__ == "__main__":
 
         global_update_idx += 1
 
-    rets, lens = evaluateCartPole.evaluate_on_fixed_scenarios(agent, args.env_id, device, 6, video_root=f"videos/{run_name}-eval", seed=args.seed+100)
-    print("eval/return_mean:", rets.mean(), "eval/len_mean:", lens.mean())
+    rows = evaluateCartPole.evaluate_on_fixed_scenarios(agent, args.env_id, device, 6, video_root=f"videos/{run_name}-eval", seed=args.seed+100)
+    # print("eval/return_mean:", rows["return_mean"], "eval/len_mean:", rows["len_mean"])
 
     # === F) Eval metrics + eval video to W&B ===
     if args.track:
@@ -509,12 +515,12 @@ if __name__ == "__main__":
             art.add_file(last_path)
         wandb.log_artifact(art)
     
-        wandb.log(
-            {
-                "eval/return_mean": float(rets.mean()),
-                "eval/len_mean": float(lens.mean()),
-            }
-        )
+        # wandb.log(
+        #     {
+        #         "eval/return_mean": float(rets.mean()),
+        #         "eval/len_mean": float(lens.mean()),
+        #     }
+        # )
         # Log one short eval clip (adjust filename if needed)
         eval_dir = f"videos/{run_name}-eval"
         if os.path.isdir(eval_dir):

@@ -4,6 +4,7 @@ import os
 import numpy as np
 import torch
 import gymnasium as gym
+from torch.distributions import Categorical
 
 
 from cartPole.cartPoleEnv import make_evaluate_env
@@ -101,27 +102,27 @@ def eval_one_config(
             if is_recurrent:
                 # --- Recurrent forward (greedy or stochastic) ---
                 # Actor pass
-                h_seq_a, h_a = Agent.gru_Actor(x.unsqueeze(1), h_a)                    # [1,1,H], [1,1,H]
-                logits = Agent.mlp_Actor(torch.cat([h_seq_a.squeeze(1), x], dim=-1))   # [1, A]
+                h_seq_a, h_a = agent.gru_Actor(x.unsqueeze(1), h_a)                    # [1,1,H], [1,1,H]
+                logits = agent.mlp_Actor(torch.cat([h_seq_a.squeeze(1), x], dim=-1))   # [1, A]
                 if greedy:
                     action = torch.argmax(logits, dim=-1)                               # [1]
                 else:
                     action = Categorical(logits=logits).sample()                        # type: ignore # [1]
 
                 # Critic pass (optional here, but cheap + consistent)
-                h_seq_c, h_c = Agent.gru_Critic(x.unsqueeze(1), h_c)
-                _ = Agent.mlp_Critic(torch.cat([h_seq_c.squeeze(1), x], dim=-1))       # [1, 1] (unused)
+                h_seq_c, h_c = agent.gru_Critic(x.unsqueeze(1), h_c)
+                _ = agent.mlp_Critic(torch.cat([h_seq_c.squeeze(1), x], dim=-1))       # [1, 1] (unused)
 
                 a = int(action.item())
 
             else:
                 # --- Feed-forward policy ---
                 if hasattr(agent, "actor"):
-                    logits = Agent.actor(x)                                             # [1, A]
+                    logits = agent.actor(x)                                             # [1, A]
                     a = int(torch.argmax(logits, dim=-1).item()) if greedy else int(Categorical(logits=logits).sample().item())
                 else:
                     # fallback: use the generic API if present
-                    a, *_ = Agent.get_action_and_value(x)
+                    a, *_ = agent.get_action_and_value(x)
                     a = int(a.item())
 
             obs, reward, terminated, truncated, _ = env.step(a)
@@ -307,7 +308,7 @@ def evaluate_on_random_configs(
 # main
 if __name__ == "__main__":
     import argparse
-    from cartPole.basicExperiments.cartPoleAgent import load_agent_from_checkpoint
+    from cartPole.cartPoleAgent import load_agent_from_checkpoint
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--env-id", type=str, default="CartPole-v1")
