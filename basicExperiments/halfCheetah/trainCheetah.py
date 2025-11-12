@@ -1,4 +1,6 @@
-# docs and experiment results can be found at https://docs.cleanrl.dev/rl-algorithms/ppo/#ppopy
+# docs and experiment results can be found at
+# https://docs.cleanrl.dev/rl-algorithms/ppo/#ppopy
+
 import os
 import random
 import time
@@ -14,7 +16,7 @@ import torch.optim as optim
 import tyro
 
 from gymnasium.envs.registration import register
-from cartPole import cartPoleEnv, cartPoleAgent, evaluateCartPole
+from . import cheetahAgent, cheetahEnv, evaluateCheetah
 
 
 @dataclass
@@ -27,25 +29,38 @@ class Args:
     """if toggled, `torch.backends.cudnn.deterministic=False`"""
     cuda: bool = False
     """if toggled, cuda will be enabled by default"""
-    track: bool = False
+    track: bool = True
     """if toggled, this experiment will be tracked with Weights and Biases"""
-    wandb_project_name: str = "robodogs-cartpole"
+    wandb_project_name: str = "robodogs-cheetah"
     """the wandb's project name"""
     wandb_entity: str = "robodogs"
     """the entity (team) of wandb's project"""
     capture_video: bool = True
     """whether to capture videos of the agent performances (check out `videos` folder)"""
 
+    # Environment Randomization
+    randomize_morphology_every: int = 5
+    """If >0, randomize morphology every N episodes"""
+    morphology_jitter: float = 0.2
+    """The amount of jitter to apply when randomizing morphology"""
+
+    # Evaluation settings
+    eval_every: int = 0
+    """If >0, evaluate the agent every N updates (default: no evaluation)"""
+    eval_episodes: int = 10
+    """The number of episodes to run during each evaluation phase"""
+    
+
     # Algorithm specific arguments
-    env_id: str = "CartPoleCustom-v0"
+    env_id: str = "Cheetah_MLP_Rand5_v0"    # NOTE: ADAPT!
     """the id of the environment"""
-    total_timesteps: int = 500000
+    total_timesteps: int = 5000000
     """total timesteps of the experiments"""
     learning_rate: float = 2.5e-4
     """the learning rate of the optimizer"""
-    num_envs: int = 4
+    num_envs: int = 128
     """the number of parallel game environments"""
-    num_steps: int = 128
+    num_steps: int = 512
     """the number of steps to run in each environment per policy rollout"""
     anneal_lr: bool = True
     """Toggle learning rate annealing for policy and value networks"""
@@ -55,7 +70,7 @@ class Args:
     """the lambda for the general advantage estimation"""
     num_minibatches: int = 4
     """the number of mini-batches"""
-    update_epochs: int = 4
+    update_epochs: int = 10
     """the K epochs to update the policy"""
     norm_adv: bool = True
     """Toggles advantages normalization"""
@@ -69,7 +84,7 @@ class Args:
     """coefficient of the value function"""
     max_grad_norm: float = 0.5
     """the maximum norm for the gradient clipping"""
-    target_kl: float = None
+    target_kl: float = 0.01
     """the target KL divergence threshold"""
 
     # to be filled in runtime
@@ -85,21 +100,21 @@ class Args:
     """Path to a checkpoint (.pt) to resume from (e.g., checkpoints/NAME/last.pt)."""
     save_every_episodes: int = 0
     """If >0, also save 'last.pt' every N completed episodes (in addition to best)."""
-    global_ckpt_dir = f"cartpole/basicExperiments/checkpoints"
+    # put cheetah checkpoints under halfCheetah
+    global_ckpt_dir: str = "halfCheetah/basicExperiments/checkpoints"
 
 
 def return_config(env: gym.Env):
-    base = env.unwrapped
-    cfg = {
-        "length": base.length,
-        "gravity": base.gravity,
-        "masscart": base.masscart,
-        "masspole": base.masspole,
-        "force_mag": base.force_mag,
-        "tau": base.tau,
-        "max_episode_steps": base.spec.max_episode_steps,
+    sp = env.unwrapped.observation_space
+    ac = env.unwrapped.action_space
+    return {
+        "obs_shape": tuple(sp.shape),
+        "act_shape": tuple(ac.shape),
+        "act_low": float(np.min(ac.low)),
+        "act_high": float(np.max(ac.high)),
+        "max_episode_steps": env.spec.max_episode_steps if env.spec else None,
     }
-    return cfg
+
 
 def pick_device():
     if torch.cuda.is_available():
@@ -110,70 +125,80 @@ def pick_device():
 
 
 if __name__ == "__main__":
+    # ---- Argument setup ----
     args = tyro.cli(Args)
     args.batch_size = int(args.num_envs * args.num_steps)
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
     args.num_iterations = args.total_timesteps // args.batch_size
+
     run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
+
+    # Register custom env
     register(
         id=args.env_id,
-        entry_point=cartPoleEnv.CartPoleCustom,
+        entry_point=cheetahEnv.CheetahCustom,
         max_episode_steps=500,
     )
 
+    # ---- W&B init ----
     if args.track:
         wandb.init(
             project=args.wandb_project_name,
-            entity=args.wandb_entity,   # can be None on personal account
+            entity=args.wandb_entity,
             config=vars(args),
             name=run_name,
-            save_code=True,             # snapshot of your code
-            settings=wandb.Settings(start_method="thread")  # robust on macOS
+            save_code=True,
+            settings=wandb.Settings(start_method="thread"),
+            mode="online",
         )
 
-    # TRY NOT TO MODIFY: seeding
+    # ---- Seeding ----
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     torch.backends.cudnn.deterministic = args.torch_deterministic
 
     device = pick_device()
-    device = "cpu" # ML stuff to tiny to have an impact
     print(f"Using device: {device}")
 
-    # env setup
+    # ---- Env setup ----
     envs = gym.vector.SyncVectorEnv(
-        [cartPoleEnv.make_env(args.env_id, i, args.capture_video, run_name) for i in range(args.num_envs)],
+        [cheetahEnv.make_env(args.env_id, i, args.capture_video, run_name, args.randomize_morphology_every, args.morphology_jitter)
+         for i in range(args.num_envs)]
     )
-    outer = envs.envs[0] 
-    base = outer.unwrapped        # == CartPoleCustom
 
+    sp = envs.single_observation_space
+    ac = envs.single_action_space
 
+    base_cfg = return_config(envs.envs[0])
     cfg = {
-        "length": base.length,
-        "gravity": base.gravity,
-        "masscart": base.masscart,
-        "masspole": base.masspole,
-        "force_mag": base.force_mag,
-        "tau": base.tau,
-        "max_episode_steps": base.spec.max_episode_steps,
+        "env_id": args.env_id,
+        "dt": getattr(envs.envs[0].unwrapped, "dt", None),
+        "frame_skip": getattr(envs.envs[0].unwrapped, "frame_skip", None),
+        "render_fps": (
+            int(round(1.0 / getattr(envs.envs[0].unwrapped, "dt")))
+            if hasattr(envs.envs[0].unwrapped, "dt") else None
+        ),
+        "max_episode_steps": base_cfg["max_episode_steps"],
+        "obs_shape": base_cfg["obs_shape"],
+        "act_shape": base_cfg["act_shape"],
+        "act_low": base_cfg["act_low"],
+        "act_high": base_cfg["act_high"],
     }
-    text = "\n".join(f"{k}: {v}" for k, v in cfg.items())
 
     if args.track:
         wandb.config.update({"env_cfg": cfg}, allow_val_change=True)
 
-    assert isinstance(envs.single_action_space, gym.spaces.Discrete), "only discrete action space is supported"
-
-    agent = cartPoleAgent.Agent(envs).to(device)
+    # ---- Agent + optimizer ----
+    agent = cheetahAgent.Agent(envs).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
 
-    # === Checkpoint directory & trackers ===
+    # ---- Checkpointing setup ----
     ckpt_dir = f"{args.global_ckpt_dir}/{run_name}"
     os.makedirs(ckpt_dir, exist_ok=True)
     best_return = -float("inf")
-    episodes_done = 0  # count completed episodes this run (for periodic saving)
-    global_update_idx = 0  # count PPO updates (outer loop iterations)
+    episodes_done = 0
+    global_update_idx = 0
 
     def _checkpoint_payload():
         return {
@@ -188,7 +213,8 @@ if __name__ == "__main__":
                 "python": random.getstate(),
                 "numpy": np.random.get_state(),
                 "torch": torch.get_rng_state(),
-                "torch_cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+                "torch_cuda": torch.cuda.get_rng_state_all()
+                if torch.cuda.is_available() else None,
             },
         }
 
@@ -198,18 +224,16 @@ if __name__ == "__main__":
     def save_best():
         torch.save(_checkpoint_payload(), os.path.join(ckpt_dir, "best.pt"))
 
-    # === Resume from checkpoint if requested (AFTER agent/optimizer/helpers exist) ===
+    # ---- Resume from checkpoint if requested ----
     if args.resume is not None and os.path.isfile(args.resume):
         ckpt = torch.load(args.resume, map_location=device)
         agent.load_state_dict(ckpt["state_dict"])
         if "optimizer" in ckpt and ckpt["optimizer"] is not None:
             optimizer.load_state_dict(ckpt["optimizer"])
-        # restore trackers
         best_return = ckpt.get("best_return", best_return)
         episodes_done = ckpt.get("episodes_done", episodes_done)
         global_step = ckpt.get("global_step", 0)
         global_update_idx = ckpt.get("global_update_idx", 0)
-        # restore RNG (overrides earlier seeding; that’s okay when resuming)
         if "rng" in ckpt:
             random.setstate(ckpt["rng"]["python"])
             np.random.set_state(ckpt["rng"]["numpy"])
@@ -217,46 +241,65 @@ if __name__ == "__main__":
             if torch.cuda.is_available() and ckpt["rng"]["torch_cuda"] is not None:
                 torch.cuda.set_rng_state_all(ckpt["rng"]["torch_cuda"])
         print(f"[resume] loaded checkpoint from: {args.resume}")
+    else:
+        global_step = 0
 
-    # ALGO Logic: Storage setup
-    obs = torch.zeros((args.num_steps, args.num_envs) + envs.single_observation_space.shape).to(device)
-    actions = torch.zeros((args.num_steps, args.num_envs) + envs.single_action_space.shape).to(device)
-    logprobs = torch.zeros((args.num_steps, args.num_envs)).to(device)
-    rewards = torch.zeros((args.num_steps, args.num_envs)).to(device)
-    dones = torch.zeros((args.num_steps, args.num_envs)).to(device)
-    values = torch.zeros((args.num_steps, args.num_envs)).to(device)
+    # ---- Storage buffers (no GRU) ----
+    obs = torch.zeros(
+        (args.num_steps, args.num_envs) + envs.single_observation_space.shape,
+        dtype=torch.float32,
+        device=device,
+    )
+    actions = torch.zeros(
+        (args.num_steps, args.num_envs) + envs.single_action_space.shape,
+        dtype=torch.float32,
+        device=device,
+    )
+    logprobs = torch.zeros((args.num_steps, args.num_envs), device=device)
+    rewards = torch.zeros((args.num_steps, args.num_envs), device=device)
+    dones = torch.zeros((args.num_steps, args.num_envs), device=device)
+    values = torch.zeros((args.num_steps, args.num_envs), device=device)
 
-    # TRY NOT TO MODIFY: start the game
-    global_step = 0
+    # ---- Start rollout ----
     start_time = time.time()
     next_obs, _ = envs.reset(seed=args.seed)
-    next_obs = torch.Tensor(next_obs).to(device)
-    next_done = torch.zeros(args.num_envs).to(device)
+    next_obs = torch.as_tensor(next_obs, device=device, dtype=torch.float32)
+    next_done = torch.zeros(args.num_envs, device=device)
+
+    # Precompute batch indices for PPO
+    b_inds = np.arange(args.batch_size)
 
     for iteration in range(1, args.num_iterations + 1):
-        # Annealing the rate if instructed to do so.
+        # ---- Learning rate annealing ----
         if args.anneal_lr:
             frac = 1.0 - (iteration - 1.0) / args.num_iterations
-            lrnow = frac * args.learning_rate
-            optimizer.param_groups[0]["lr"] = lrnow
+            optimizer.param_groups[0]["lr"] = frac * args.learning_rate
 
-        for step in range(0, args.num_steps):
+        # ---- Rollout phase ----
+        for step in range(args.num_steps):
             global_step += args.num_envs
+
             obs[step] = next_obs
             dones[step] = next_done
 
-            # ALGO LOGIC: action logic
             with torch.no_grad():
+                # Agent outputs continuous action in [-1,1], logprob, entropy, value
                 action, logprob, _, value = agent.get_action_and_value(next_obs)
-                values[step] = value.flatten()
+                values[step] = value.view(-1)
+
             actions[step] = action
             logprobs[step] = logprob
 
-            # TRY NOT TO MODIFY: execute the game and log data.
-            next_obs, reward, terminations, truncations, infos = envs.step(action.cpu().numpy())
+            # Step in env
+            next_obs_np, reward, terminations, truncations, infos = envs.step(
+                action.cpu().numpy()
+            )
             next_done = np.logical_or(terminations, truncations)
-            rewards[step] = torch.tensor(reward, dtype=torch.float32).to(device).view(-1)
-            next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(next_done).to(device)
+            rewards[step] = torch.as_tensor(reward, device=device, dtype=torch.float32)
+            next_obs = torch.as_tensor(next_obs_np, device=device, dtype=torch.float32)
+            next_done = torch.as_tensor(next_done, device=device, dtype=torch.float32)
+
+            # Logging episodic returns
             if "episode" in infos:
                 ep = infos["episode"]
                 ep_r = float(ep["r"].max())
@@ -271,26 +314,24 @@ if __name__ == "__main__":
                             "global_step": global_step,
                         }
                     )
-                # === checkpointing ===
-                episodes_done += 1
-                # Always keep the rolling "last.pt"
-                save_last()
 
+                episodes_done += 1
+                save_last()
                 if args.save_every_episodes and (episodes_done % args.save_every_episodes == 0):
                     save_last()
-
                 if ep_r > best_return:
                     best_return = ep_r
                     save_best()
                     if args.track:
-                        wandb.log({"perf/best_return": best_return, "global_step": global_step})
-        
+                        wandb.log(
+                            {"perf/best_return": best_return, "global_step": global_step}
+                        )
 
-        # bootstrap value if not done
+        # ---- GAE advantage computation ----
         with torch.no_grad():
-            next_value = agent.get_value(next_obs).reshape(1, -1)
-            advantages = torch.zeros_like(rewards).to(device)
-            lastgaelam = 0
+            next_value = agent.get_value(next_obs).view(-1)
+            advantages = torch.zeros_like(rewards, device=device)
+            lastgaelam = 0.0
             for t in reversed(range(args.num_steps)):
                 if t == args.num_steps - 1:
                     nextnonterminal = 1.0 - next_done
@@ -299,19 +340,20 @@ if __name__ == "__main__":
                     nextnonterminal = 1.0 - dones[t + 1]
                     nextvalues = values[t + 1]
                 delta = rewards[t] + args.gamma * nextvalues * nextnonterminal - values[t]
-                advantages[t] = lastgaelam = delta + args.gamma * args.gae_lambda * nextnonterminal * lastgaelam
+                advantages[t] = lastgaelam = (
+                    delta + args.gamma * args.gae_lambda * nextnonterminal * lastgaelam
+                )
             returns = advantages + values
 
-        # flatten the batch
+        # ---- Flatten batch ----
         b_obs = obs.reshape((-1,) + envs.single_observation_space.shape)
-        b_logprobs = logprobs.reshape(-1)
         b_actions = actions.reshape((-1,) + envs.single_action_space.shape)
+        b_logprobs = logprobs.reshape(-1)
         b_advantages = advantages.reshape(-1)
         b_returns = returns.reshape(-1)
         b_values = values.reshape(-1)
 
-        # Optimizing the policy and value network
-        b_inds = np.arange(args.batch_size)
+        # ---- PPO update ----
         clipfracs = []
         for epoch in range(args.update_epochs):
             np.random.shuffle(b_inds)
@@ -319,41 +361,53 @@ if __name__ == "__main__":
                 end = start + args.minibatch_size
                 mb_inds = b_inds[start:end]
 
-                _, newlogprob, entropy, newvalue = agent.get_action_and_value(b_obs[mb_inds], b_actions.long()[mb_inds])
-                logratio = newlogprob - b_logprobs[mb_inds]
+                mb_obs = b_obs[mb_inds]
+                mb_actions = b_actions[mb_inds]
+                mb_old_logprobs = b_logprobs[mb_inds]
+                mb_advantages = b_advantages[mb_inds]
+                mb_returns = b_returns[mb_inds]
+                mb_values = b_values[mb_inds] 
+
+                # new logprob / value / entropy
+                new_action, new_logprob, entropy, new_value = agent.get_action_and_value(
+                    mb_obs, mb_actions
+                )
+
+                # PPO ratio
+                logratio = new_logprob - mb_old_logprobs
                 ratio = logratio.exp()
 
                 with torch.no_grad():
                     old_approx_kl = (-logratio).mean()
                     approx_kl = ((ratio - 1) - logratio).mean()
-                    clipfracs += [((ratio - 1.0).abs() > args.clip_coef).float().mean().item()]
+                    clipfracs.append(((ratio - 1.0).abs() > args.clip_coef).float().mean().item())
 
-                mb_advantages = b_advantages[mb_inds]
+                adv = mb_advantages
                 if args.norm_adv:
-                    mb_advantages = (mb_advantages - mb_advantages.mean()) / (mb_advantages.std() + 1e-8)
+                    adv = (adv - adv.mean()) / (adv.std() + 1e-8)
 
                 # Policy loss
-                pg_loss1 = -mb_advantages * ratio
-                pg_loss2 = -mb_advantages * torch.clamp(ratio, 1 - args.clip_coef, 1 + args.clip_coef)
+                pg_loss1 = -adv * ratio
+                pg_loss2 = -adv * torch.clamp(
+                    ratio, 1.0 - args.clip_coef, 1.0 + args.clip_coef
+                )
                 pg_loss = torch.max(pg_loss1, pg_loss2).mean()
 
                 # Value loss
-                newvalue = newvalue.view(-1)
+                new_value = new_value.view(-1)
                 if args.clip_vloss:
-                    v_loss_unclipped = (newvalue - b_returns[mb_inds]) ** 2
-                    v_clipped = b_values[mb_inds] + torch.clamp(
-                        newvalue - b_values[mb_inds],
-                        -args.clip_coef,
-                        args.clip_coef,
+                    v_unclipped = (new_value - mb_returns).pow(2)
+                    v_clipped = mb_values + torch.clamp(
+                        new_value - mb_values, -args.clip_coef, args.clip_coef
                     )
-                    v_loss_clipped = (v_clipped - b_returns[mb_inds]) ** 2
-                    v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
-                    v_loss = 0.5 * v_loss_max.mean()
+                    v_loss = 0.5 * torch.max(
+                        v_unclipped, (v_clipped - mb_returns).pow(2)
+                    ).mean()
                 else:
-                    v_loss = 0.5 * ((newvalue - b_returns[mb_inds]) ** 2).mean()
+                    v_loss = 0.5 * (new_value - mb_returns).pow(2).mean()
 
                 entropy_loss = entropy.mean()
-                loss = pg_loss - args.ent_coef * entropy_loss + v_loss * args.vf_coef
+                loss = pg_loss - args.ent_coef * entropy_loss + args.vf_coef * v_loss
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -363,9 +417,10 @@ if __name__ == "__main__":
             if args.target_kl is not None and approx_kl > args.target_kl:
                 break
 
+        # Explained variance
         y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
         var_y = np.var(y_true)
-        explained_var = np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
+        explained_var = np.nan if var_y == 0 else 1.0 - np.var(y_true - y_pred) / var_y
 
         if args.track:
             wandb.log(
@@ -383,37 +438,106 @@ if __name__ == "__main__":
                 }
             )
         print("SPS:", int(global_step / (time.time() - start_time)))
-
         global_update_idx += 1
 
-    rets, lens = evaluateCartPole.evaluate_on_fixed_scenarios(agent, args.env_id, device, 6, video_dir=f"videos/{run_name}-eval", seed=args.seed+100)
-    print("eval/return_mean:", rets.mean(), "eval/len_mean:", lens.mean())
+    # ---- Evaluation on fixed scenarios ----
+    rows = evaluateCheetah.evaluate_on_fixed_scenarios(
+        agent,
+        args.env_id,
+        device,
+        6,
+        video_root=f"videos/{run_name}-eval",
+        seed=args.seed + 100,
+    )
 
-    # === F) Eval metrics + eval video to W&B ===
+    ret_means = np.array([r["return_mean"] for r in rows], dtype=np.float64)
+    len_means = np.array([r["len_mean"] for r in rows], dtype=np.float64)
+    summary = {
+        "eval/return_mean_over_scenarios": float(ret_means.mean()),
+        "eval/return_std_over_scenarios": float(
+            ret_means.std(ddof=1) if len(ret_means) > 1 else 0.0
+        ),
+        "eval/len_mean_over_scenarios": float(len_means.mean()),
+        "eval/len_std_over_scenarios": float(
+            len_means.std(ddof=1) if len(len_means) > 1 else 0.0
+        ),
+    }
+
+    print("\n=== Eval summary (over scenarios) ===")
+    for k, v in summary.items():
+        print(f"{k}: {v:.3f}")
+
+    print("\n=== Per-scenario results ===")
+    for r in rows:
+        print(
+            f"{r['scenario']:>16s} | "
+            f"ret_mean={r['return_mean']:+8.2f} (±{r['return_std']:.2f}) | "
+            f"len_mean={r['len_mean']:7.1f} (±{r['len_std']:.1f})"
+        )
+
+    # ---- CSV logging ----
+    eval_dir = f"videos/{run_name}-eval"
+    os.makedirs(eval_dir, exist_ok=True)
+    csv_path = os.path.join(eval_dir, "eval_summary.csv")
+
+    import csv
+
+    with open(csv_path, "w", newline="") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[
+                "scenario",
+                "length",
+                "masspole",
+                "masscart",
+                "return_mean",
+                "return_std",
+                "len_mean",
+                "len_std",
+            ],
+        )
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"[eval] wrote {csv_path}")
+
+    # ---- W&B eval logging ----
     if args.track:
-        art = wandb.Artifact(name="cartpole-agent", type="model")
-        best_path = f"{ckpt_dir}/best.pt"
-        last_path = f"{ckpt_dir}/last.pt"
+        wandb.log({**summary, "global_step": global_step})
+
+        table_cols = [
+            "scenario",
+            "length",
+            "masspole",
+            "masscart",
+            "return_mean",
+            "return_std",
+            "len_mean",
+            "len_std",
+        ]
+        wb_table = wandb.Table(columns=table_cols)
+        for r in rows:
+            wb_table.add_data(*[r[c] for c in table_cols])
+        wandb.log({"eval/table": wb_table})
+
+        if os.path.isdir(eval_dir):
+            mp4s = sorted([f for f in os.listdir(eval_dir) if f.endswith(".mp4")])
+            if mp4s:
+                wandb.log(
+                    {
+                        "eval/video": wandb.Video(
+                            os.path.join(eval_dir, mp4s[0]), fps=24, format="mp4"
+                        )
+                    }
+                )
+
+        art = wandb.Artifact(name="cheetah-agent-mlp", type="model")
+        best_path = os.path.join(ckpt_dir, "best.pt")
+        last_path = os.path.join(ckpt_dir, "last.pt")
         if os.path.exists(best_path):
             art.add_file(best_path)
         if os.path.exists(last_path):
             art.add_file(last_path)
         wandb.log_artifact(art)
-    
-        wandb.log(
-            {
-                "eval/return_mean": float(rets.mean()),
-                "eval/len_mean": float(lens.mean()),
-            }
-        )
-        # Log one short eval clip (adjust filename if needed)
-        eval_dir = f"videos/{run_name}-eval"
-        if os.path.isdir(eval_dir):
-            mp4s = sorted([f for f in os.listdir(eval_dir) if f.endswith(".mp4")])
-            if mp4s:
-                wandb.log({"eval/video": wandb.Video(os.path.join(eval_dir, mp4s[0]), fps=24, format="mp4")})
-
         wandb.finish()
 
     envs.close()
-        

@@ -3,12 +3,20 @@ import numpy as np
 import torch.nn as nn
 import torch
 
+def _obs_act_dims_from_any(envs=None, obs_space=None, act_space=None, obs_shape=None, act_shape=None):
+    if envs is not None:
+        return int(np.prod(envs.single_observation_space.shape)), int(np.prod(envs.single_action_space.shape))
+    if obs_space is not None and act_space is not None:
+        return int(np.prod(obs_space.shape)), int(np.prod(act_space.shape))
+    if obs_shape is not None and act_shape is not None:
+        return int(np.prod(obs_shape)), int(np.prod(act_shape))
+    raise ValueError("Provide either envs or (obs_space, act_space) or (obs_shape, act_shape).")
+
 
 class Agent(nn.Module):
-    def __init__(self, envs):
+    def __init__(self, envs=None, *, obs_space=None, act_space=None, obs_shape=None, act_shape=None):
         super().__init__()
-        obs_dim = int(np.prod(envs.single_observation_space.shape))
-        act_dim = int(np.prod(envs.single_action_space.shape))
+        obs_dim, act_dim = _obs_act_dims_from_any(envs, obs_space, act_space, obs_shape, act_shape)
 
         # Critic (value function)
         self.critic = nn.Sequential(
@@ -68,10 +76,10 @@ class Agent(nn.Module):
     
 
 class GRUAgent(nn.Module):
-    def __init__(self, envs, hidden_size: int = 128):
+    def __init__(self, envs=None, *, obs_space=None, act_space=None, obs_shape=None, act_shape=None, hidden_size: int = 128):
         super().__init__()
-        obs_dim = int(np.prod(envs.single_observation_space.shape))
-        act_dim = int(np.prod(envs.single_action_space.shape))
+        self.hidden_size = hidden_size
+        obs_dim, act_dim = _obs_act_dims_from_any(envs, obs_space, act_space, obs_shape, act_shape)
         self.hidden_size = hidden_size
 
         # Critic
@@ -139,3 +147,35 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     torch.nn.init.orthogonal_(layer.weight, std)
     torch.nn.init.constant_(layer.bias, bias_const)
     return layer
+
+def load_agent_from_checkpoint(
+    ckpt_path: str,
+    device: str | torch.device = "cpu",
+    *,
+    force_agent_type: str | None = None,   # "mlp"/"gru" to override
+) -> torch.nn.Module:
+    ckpt = torch.load(ckpt_path, map_location=device)
+    if "state_dict" not in ckpt or "meta" not in ckpt:
+        raise ValueError("Checkpoint must contain 'state_dict' and 'meta'. Update the training saver.")
+
+    state_dict = ckpt["state_dict"]
+    meta = ckpt["meta"]
+    agent_type = force_agent_type or meta.get("agent_type", "mlp")
+    obs_shape = tuple(meta["obs_shape"])
+    act_shape = tuple(meta["act_shape"])
+    hidden = meta.get("gru_hidden_size", 128)
+
+    if agent_type == "gru":
+        agent = GRUAgent(obs_shape=obs_shape, act_shape=act_shape, hidden_size=hidden)
+    elif agent_type == "mlp":
+        agent = Agent(obs_shape=obs_shape, act_shape=act_shape)
+    else:
+        raise ValueError(f"Unknown agent_type '{agent_type}'")
+
+    # load weights
+    missing, unexpected = agent.load_state_dict(state_dict, strict=False)
+    if missing:   print("[load] missing keys:", missing)
+    if unexpected:print("[load] unexpected keys:", unexpected)
+
+    agent.to(device).eval()
+    return agent

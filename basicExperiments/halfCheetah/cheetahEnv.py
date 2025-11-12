@@ -3,6 +3,7 @@ import gymnasium as gym
 from typing import Any, Dict, Optional
 import numpy as np
 import mujoco
+from gymnasium.utils import seeding
 
 
 class CheetahCustom(HalfCheetahEnv):
@@ -11,6 +12,7 @@ class CheetahCustom(HalfCheetahEnv):
       - optional obs padding,
       - upright shaping + early termination when on the back,
       - simple morphology scaling hooks,
+      - OPTIONAL domain randomization via `change_every`,
       - obs cast to float32 and observation_space set to float32 to avoid dtype warnings.
     """
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 20}
@@ -23,13 +25,34 @@ class CheetahCustom(HalfCheetahEnv):
         min_torso_h: float = 0.30,      # terminate if torso COM too low
         upright_bonus_k: float = 0.30,  # smoothing weight added to default reward
         upright_bonus_margin: float = 0.0,
+        # ---- new: domain randomization controls ----
+        change_every: int = 0,          # 0 => no domain randomization; >0 => randomize every N episodes
+        morphology_jitter: float = 0.2, # +/- 20% scaling around 1.0 by default
+        seed: Optional[int] = None,
         **kwargs
     ):
         super().__init__(**kwargs)
+        self._geom_size0 = self.model.geom_size.copy()
+        self._body_mass0 = self.model.body_mass.copy()
+
+        # cache common geom/body ids by name (standard HalfCheetah asset names)
+        def _gid(nm): return mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, nm)
+        def _bid(nm): return mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, nm)
+        self._ids = {
+            "geom": {
+                "torso": _gid("torso"),
+                "bthigh": _gid("bthigh"), "bshin": _gid("bshin"), "bfoot": _gid("bfoot"),
+                "fthigh": _gid("fthigh"), "fshin": _gid("fshin"), "ffoot": _gid("ffoot"),
+            },
+            "body": {
+                "torso": _bid("torso"),
+                "bthigh": _bid("bthigh"), "bshin": _bid("bshin"), "bfoot": _bid("bfoot"),
+                "fthigh": _bid("fthigh"), "fshin": _bid("fshin"), "ffoot": _bid("ffoot"),
+            }
+        }
 
         # ---- obs settings ----
         self.obs_pad = obs_pad
-        # make the observation_space say float32 (Gym default here is float64)
         base_shape = self.observation_space.shape
         if obs_pad is None:
             self.observation_space = gym.spaces.Box(
@@ -49,17 +72,21 @@ class CheetahCustom(HalfCheetahEnv):
         self.upright_bonus_margin = float(upright_bonus_margin)
 
         # ---- cached ids ----
-        # robust name->id resolution for body "torso"
         self._torso_bid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "torso")
         if self._torso_bid < 0:
             raise RuntimeError("Could not resolve body id for 'torso'. Check MuJoCo version or body name.")
 
         self._world_up = np.array([0.0, 0.0, 1.0], dtype=np.float64)
 
+        # ---- NEW: domain randomization bookkeeping ----
+        self.change_every = int(change_every)
+        self.morphology_jitter = float(morphology_jitter)
+        self._episode_idx = 0
+        self.np_random, _ = seeding.np_random(seed)
+
     # ---------- utilities ----------
     def _upright_and_height(self):
         """Returns (upright_cos, torso_height)."""
-        # data.xmat is (nbody, 9) row-major rotation matrices
         R = self.data.xmat[self._torso_bid].reshape(3, 3)    # body->world rotation
         torso_up_world = R[:, 2]                             # body +Z in world coords
         upright = float(np.clip(self._world_up.dot(torso_up_world), -1.0, 1.0))
@@ -69,45 +96,118 @@ class CheetahCustom(HalfCheetahEnv):
     # ---------- morphology hooks ----------
     def set_morphology(self, **scales: float) -> None:
         """
-        Store desired scales (e.g., thigh_scale=1.2).
-        Supported keys (applied to geoms if present): 
-            'thigh_scale', 'shin_scale', 'foot_scale', 'torso_scale'
-        Applied to both front/back legs when applicable.
+        Store desired *embodiment-only* scales. These are applied idempotently
+        (we restore baseline sizes/masses before re-applying).
+
+        Torso:
+        - torso_len_scale, torso_rad_scale, torso_mass_scale
+        - torso_scale (uniform size; used if *_len/_rad not given)
+
+        Front leg segments (prefix 'f'): fthigh, fshin, ffoot
+        Back  leg segments (prefix 'b'): bthigh, bshin, bfoot
+        - <seg>_len_scale, <seg>_rad_scale, <seg>_mass_scale
+
+        Leg-level shortcuts (fan out to all segments if per-seg keys are None):
+        - fleg_len_scale, fleg_rad_scale, fleg_mass_scale
+        - bleg_len_scale, bleg_rad_scale, bleg_mass_scale
+
+        Legacy per-segment uniform (lowest precedence across both legs):
+        - thigh_scale, shin_scale, foot_scale
+        - front_leg_scale, back_leg_scale (size uniform per leg)
+        - torso_scale (as above)
         """
         self._morphology.update(scales)
 
     def _apply_morphology(self) -> None:
-        """Best-effort scaling of common HalfCheetah geoms by name."""
+        """Apply size & mass scales to geoms/bodies idempotently (no compounding)."""
         if not self._morphology:
             return
 
-        # Map of scale-key -> list of geom names to scale (radius/length via geom_size[:,0])
-        groups = {
-            "thigh_scale": ["bthigh", "fthigh"],
-            "shin_scale":  ["bshin", "fshin"],
-            "foot_scale":  ["bfoot", "ffoot"],
-            "torso_scale": ["torso"],  # note: body has multiple geoms in some mjcfs; this is safe if present
-        }
+        m, d = self.model, self.data
+        g0 = self._geom_size0
+        m0 = self._body_mass0
+        ids = self._ids
+        S = self._morphology
 
-        for key, names in groups.items():
-            s = float(self._morphology.get(key, 1.0))
-            if abs(s - 1.0) < 1e-8:
-                continue
-            for gname in names:
-                try:
-                    gid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, gname)
-                    if gid >= 0:
-                        # geom_size: (ngeom, 3) — for capsules/cylinders, size[0] is radius, size[1] is half-length
-                        # We scale length-like dimension conservatively: both radius and half-length.
-                        self.model.geom_size[gid, 0] *= s
-                        if self.model.geom_type[gid] in (mujoco.mjtGeom.mjGEOM_CAPSULE, mujoco.mjtGeom.mjGEOM_CYLINDER):
-                            self.model.geom_size[gid, 1] *= s
-                except Exception:
-                    # Name may not exist; skip silently.
-                    pass
+        # reset to baseline first (avoid compounding across episodes)
+        m.geom_size[:] = g0
+        m.body_mass[:] = m0
 
-        # After editing model parameters, let MuJoCo recompute derived data
-        mujoco.mj_forward(self.model, self.data)
+        # helpers
+        def _apply_geom_scale(gid: int, len_scale, rad_scale, uni_scale):
+            if gid < 0:
+                return
+            rs = rad_scale if rad_scale is not None else uni_scale
+            ls = len_scale if len_scale is not None else uni_scale
+            if rs is not None:
+                m.geom_size[gid, 0] = g0[gid, 0] * float(rs)  # radius for capsule/cylinder
+            # length only for capsule/cylinder
+            if ls is not None and m.geom_type[gid] in (mujoco.mjtGeom.mjGEOM_CAPSULE, mujoco.mjtGeom.mjGEOM_CYLINDER):
+                m.geom_size[gid, 1] = g0[gid, 1] * float(ls)
+
+        def _apply_body_mass(bid: int, mass_scale):
+            if bid < 0 or mass_scale is None:
+                return
+            m.body_mass[bid] = m0[bid] * float(mass_scale)
+
+        # ----- torso -----
+        _apply_geom_scale(
+            ids["geom"]["torso"],
+            S.get("torso_len_scale"),
+            S.get("torso_rad_scale"),
+            S.get("torso_scale"),
+        )
+        _apply_body_mass(ids["body"]["torso"], S.get("torso_mass_scale"))
+
+        # leg-level shortcuts
+        fleg_len = S.get("fleg_len_scale"); fleg_rad = S.get("fleg_rad_scale"); fleg_mass = S.get("fleg_mass_scale")
+        bleg_len = S.get("bleg_len_scale"); bleg_rad = S.get("bleg_rad_scale"); bleg_mass = S.get("bleg_mass_scale")
+
+        # legacy fallbacks (lowest precedence)
+        thigh_uni = S.get("thigh_scale")
+        shin_uni  = S.get("shin_scale")
+        foot_uni  = S.get("foot_scale")
+        front_uni = S.get("front_leg_scale")  # size-only
+        back_uni  = S.get("back_leg_scale")   # size-only
+
+        # apply per segment for front/back with fallbacks
+        for seg in ("thigh", "shin", "foot"):
+            # front
+            gk = f"f{seg}"
+            _apply_geom_scale(
+                ids["geom"][gk],
+                S.get(f"{gk}_len_scale", fleg_len),
+                S.get(f"{gk}_rad_scale", fleg_rad),
+                # uniform size fallback preference: front_leg_scale > legacy seg scale
+                (front_uni if front_uni is not None else S.get(f"{seg}_scale"))
+            )
+            _apply_body_mass(ids["body"][gk], S.get(f"{gk}_mass_scale", fleg_mass))
+
+            # back
+            gk = f"b{seg}"
+            _apply_geom_scale(
+                ids["geom"][gk],
+                S.get(f"{gk}_len_scale", bleg_len),
+                S.get(f"{gk}_rad_scale", bleg_rad),
+                (back_uni if back_uni is not None else S.get(f"{seg}_scale"))
+            )
+            _apply_body_mass(ids["body"][gk], S.get(f"{gk}_mass_scale", bleg_mass))
+
+        mujoco.mj_forward(m, d)
+
+    # ---- random morphology sampler (like CartPoleDomainRandEnv._randomize_params) ----
+    def _randomize_morphology(self):
+        j = self.morphology_jitter
+        def sample(): return float(self.np_random.uniform(1.0 - j, 1.0 + j))
+        scales = dict(
+            # torso
+            torso_len_scale=sample(), torso_rad_scale=sample(), torso_mass_scale=sample(),
+            # leg-level shortcuts (spread to segments)
+            fleg_len_scale=sample(), fleg_rad_scale=sample(), fleg_mass_scale=sample(),
+            bleg_len_scale=sample(), bleg_rad_scale=sample(), bleg_mass_scale=sample(),
+        )
+        self.set_morphology(**scales)
+        self._apply_morphology()
 
     # ---------- observation helpers ----------
     def _pad(self, obs: np.ndarray) -> np.ndarray:
@@ -122,9 +222,27 @@ class CheetahCustom(HalfCheetahEnv):
         return out
 
     # ---------- standard Gym API ----------
-    def reset(self, *, seed: Optional[int] = None, options: Optional[Dict[str, Any]] = None):
+    def reset(
+        self,
+        *,
+        seed: Optional[int] = None,
+        options: Optional[Dict[str, Any]] = None,
+    ):
+        # keep vector-env seeding compatible
+        if seed is not None:
+            self.np_random, _ = seeding.np_random(seed)
+
+        # domain randomization: like CartPoleDomainRandEnv
+        if self.change_every > 0:
+            # episode index is per-environment
+            self._episode_idx += 1
+            if (self._episode_idx - 1) % self.change_every == 0:
+                # randomize before ep 1, 1+change_every, ...
+                self._randomize_morphology()
+
         obs, info = super().reset(seed=seed, options=options)
-        # Apply morphology once at the beginning of the first episode (safe to call multiple times).
+        # morphology is already applied in _randomize_morphology();
+        # if you ever call set_morphology manually, this keeps it consistent:
         self._apply_morphology()
         return self._pad(obs), info
 
@@ -136,7 +254,7 @@ class CheetahCustom(HalfCheetahEnv):
         info["upright"] = up
         info["torso_h"] = h
 
-        # stability shaping (in [0,1], softened by margin)
+        # stability shaping
         denom = (1.0 - self.upright_bonus_margin + 1e-8)
         upright_piece = max(0.0, (up - self.upright_bonus_margin)) / denom
         rew = float(rew + self.upright_bonus_k * upright_piece)
@@ -153,14 +271,21 @@ class CheetahCustom(HalfCheetahEnv):
 
 
 # --- vector/eval helpers ---
-def make_env(env_id: str, idx: int, capture_video: bool, run_name: str):
+def make_env(env_id: str, idx: int, capture_video: bool, run_name: str, change_every: int = 0, morphology_jitter: float = 0.2):
+    """
+    Default env factory. `change_every=0` means no domain randomization.
+    To enable domain randomization, pass change_every>0 from your training script.
+    """
     def thunk():
         rm = "rgb_array" if (capture_video and idx == 0) else None
-        env = CheetahCustom(render_mode=rm)
+        env = CheetahCustom(render_mode=rm, change_every=change_every, morphology_jitter=morphology_jitter)
         env = gym.wrappers.RecordEpisodeStatistics(env)
         if capture_video and idx == 0:
-            # record every episode from env #0
-            env = gym.wrappers.RecordVideo(env, f"videos/{run_name}", episode_trigger=lambda ep: True)
+            env = gym.wrappers.RecordVideo(
+                env,
+                f"videos/{run_name}",
+                episode_trigger=lambda ep: (ep % 10) == 0,
+            )
         return env
     return thunk
 

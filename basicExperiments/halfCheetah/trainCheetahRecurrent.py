@@ -34,13 +34,29 @@ class Args:
     """the wandb's project name"""
     wandb_entity: str = "robodogs"
     """the entity (team) of wandb's project"""
-    capture_video: bool = True
+    capture_video: bool = False
     """whether to capture videos of the agent performances (check out `videos` folder)"""
 
+    # Environment Randomization
+    randomize_morphology_every: int = 0
+    """If >0, randomize morphology every N episodes"""
+    morphology_jitter: float = 0.2
+    """The amount of jitter to apply when randomizing morphology"""
+
+    # Evaluation settings
+    eval_every: int = 8
+    """If >0, evaluate the agent every N updates (default: no evaluation)"""
+    eval_episodes: int = 8
+    """The number of episodes to run during each evaluation phase"""
+    eval_num_envs: int = 8
+    """The number of parallel envs to use during evaluation"""
+    eval_capture_video: bool = False
+    """Whether to capture videos during evaluation"""
+
     # Algorithm specific arguments
-    env_id: str = "HalfCheetahCustom-v5"
+    env_id: str = "Cheetah_Recurrent_Static"
     """the id of the environment"""
-    total_timesteps: int = 20000000
+    total_timesteps: int = 5000000
     """total timesteps of the experiments"""
     learning_rate: float = 2.5e-4
     """the learning rate of the optimizer"""
@@ -144,7 +160,7 @@ if __name__ == "__main__":
 
     # env setup
     env_fns = [
-        cheetahEnv.make_env(args.env_id, i, args.capture_video, run_name)
+        cheetahEnv.make_env(args.env_id, i, args.capture_video, run_name, args.randomize_morphology_every, args.morphology_jitter)
         for i in range(args.num_envs)
     ]
 
@@ -198,11 +214,22 @@ if __name__ == "__main__":
         return {
             "state_dict": agent.state_dict(),
             "optimizer": optimizer.state_dict(),
-            "best_return": best_return,
-            "episodes_done": episodes_done,
-            "global_step": global_step,
-            "global_update_idx": global_update_idx,
-            "args": vars(args),
+            "meta": {
+                "schema_version": 1,
+                "agent_type": "gru" if hasattr(agent, "gru_Actor") else "mlp",
+                "env_id": args.env_id,
+                "obs_shape": tuple(envs.single_observation_space.shape),
+                "act_shape": tuple(envs.single_action_space.shape),
+                "gru_hidden_size": getattr(agent, "hidden_size", None),
+                "train_stats": {
+                    "global_step": global_step,
+                    "global_update_idx": global_update_idx,
+                    "best_return": best_return,
+                    "episodes_done": episodes_done,
+                    "sps": int(global_step / max(1, (time.time() - start_time))),
+                    "saved_at_unix": int(time.time()),
+                },
+            },
             "rng": {
                 "python": random.getstate(),
                 "numpy": np.random.get_state(),
@@ -450,6 +477,68 @@ if __name__ == "__main__":
             )
         print("SPS:", int(global_step / (time.time() - start_time)))
 
+        # === Lightweight evaluation every N updates ===
+        if args.eval_every > 0 and (global_update_idx % args.eval_every) == 0:
+            agent.eval()
+            try:
+                print("\n=== Running evaluation ===")
+                eval_tag = f"u{global_update_idx:05d}"
+                eval_video_root: Optional[str] = (f"videos/{run_name}-eval/{eval_tag}" if args.eval_capture_video else None)
+
+                rows = evaluateCheetah.evaluate_on_fixed_scenarios(
+                    agent,
+                    args.env_id,
+                    device,
+                    episodes_per_scenario=args.eval_episodes,
+                    video_root=eval_video_root,
+                    seed=args.seed + 100 + global_update_idx,   # different seed per eval
+                    num_envs=args.eval_num_envs,
+                )
+
+                # Summaries
+                ret_means = np.array([r["return_mean"] for r in rows], dtype=np.float64)
+                len_means = np.array([r["len_mean"] for r in rows], dtype=np.float64)
+                eval_summary = {
+                    "eval/return_mean_over_scenarios": float(ret_means.mean()),
+                    "eval/return_std_over_scenarios":  float(ret_means.std(ddof=1) if len(ret_means) > 1 else 0.0),
+                    "eval/len_mean_over_scenarios":    float(len_means.mean()),
+                    "eval/len_std_over_scenarios":     float(len_means.std(ddof=1) if len(len_means) > 1 else 0.0),
+                }
+
+                print(f"\n[eval @ update {global_update_idx}] "
+                    f"mean_ret={eval_summary['eval/return_mean_over_scenarios']:.2f} "
+                    f"std_ret={eval_summary['eval/return_std_over_scenarios']:.2f}")
+
+                # Optional: treat eval mean as "best" gate too
+                if eval_summary["eval/return_mean_over_scenarios"] > best_return:
+                    best_return = eval_summary["eval/return_mean_over_scenarios"]
+                    save_best()
+
+                if args.track:
+                    # Log rolled-up scalars
+                    wandb.log({**eval_summary, "global_step": global_step,
+                            "eval/update_idx": global_update_idx})
+
+                    # Log per-scenario table (small)
+                    cols = ["scenario", "return_mean", "return_std", "len_mean", "len_std"]
+                    tb = wandb.Table(columns=cols)
+                    for r in rows:
+                        tb.add_data(r["scenario"], r["return_mean"], r["return_std"], r["len_mean"], r["len_std"])
+                    wandb.log({f"eval/table_{eval_tag}": tb})
+
+                    # Optionally log one short video if present
+                    if eval_video_root and os.path.isdir(eval_video_root):
+                        mp4s = sorted(f for f in os.listdir(eval_video_root) if f.endswith(".mp4"))
+                        if mp4s:
+                            wandb.log({
+                                "eval/video": wandb.Video(os.path.join(eval_video_root, mp4s[0]), fps=24, format="mp4")
+                            })
+            except Exception as e:
+                print(f"[eval] skipped due to error: {e}")
+            finally:
+                agent.train()
+                print("=== Finished evaluation ===\n")
+
         global_update_idx += 1
 
     rows = evaluateCheetah.evaluate_on_fixed_scenarios(agent, args.env_id, device, 6, video_root=f"videos/{run_name}-eval", seed=args.seed+100)
@@ -525,4 +614,6 @@ if __name__ == "__main__":
         wandb.finish()
 
     envs.close()
+    del envs
+    import gc; gc.collect()
             
