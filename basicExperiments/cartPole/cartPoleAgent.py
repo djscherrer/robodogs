@@ -36,12 +36,13 @@ class Agent(nn.Module):
 
 
 class GRUAgent(nn.Module):
-    def __init__(self, envs: VectorEnv, hidden_size: int = 128):
+    def __init__(self, envs: VectorEnv, hidden_size: int = 128, mlp_hidden: int = 16):
         # Init Actor-Critic model
         super().__init__()
         # GRU receives input size equal to observation space size
         # and outputs hidden state of specified size
         self.hidden_size = hidden_size
+        self.mlp_hidden = mlp_hidden
         self.gru_Critic = nn.GRU(
             input_size=np.array(envs.single_observation_space.shape).prod(),
             hidden_size=hidden_size,
@@ -49,9 +50,9 @@ class GRUAgent(nn.Module):
         )
 
         self.mlp_Critic = nn.Sequential(
-            layer_init(nn.Linear(hidden_size + np.array(envs.single_observation_space.shape).prod(), 16)),
+            layer_init(nn.Linear(hidden_size + np.array(envs.single_observation_space.shape).prod(), mlp_hidden)),
             nn.Tanh(),
-            layer_init(nn.Linear(16, 1), std=1.0),
+            layer_init(nn.Linear(mlp_hidden, 1), std=1.0),
         )
 
         self.gru_Actor = nn.GRU(
@@ -60,9 +61,9 @@ class GRUAgent(nn.Module):
             batch_first=True
         )
         self.mlp_Actor = nn.Sequential(
-            layer_init(nn.Linear(hidden_size + np.array(envs.single_observation_space.shape).prod(), 16)),
+            layer_init(nn.Linear(hidden_size + np.array(envs.single_observation_space.shape).prod(), mlp_hidden)),
             nn.Tanh(),
-            layer_init(nn.Linear(16, envs.single_action_space.n), std=0.01),
+            layer_init(nn.Linear(mlp_hidden, envs.single_action_space.n), std=0.01),
         )
     
     def get_value(self, x, hx=None):
