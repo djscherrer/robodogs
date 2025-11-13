@@ -5,7 +5,9 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 import wandb
-
+from typing import Optional, Callable, Tuple, Any
+from gymnasium.envs.classic_control import CartPoleEnv
+from gymnasium import spaces
 import gymnasium as gym
 import numpy as np
 import torch
@@ -14,7 +16,7 @@ import torch.optim as optim
 import tyro
 
 from gymnasium.envs.registration import register
-from cartPole import cartPoleEnv, cartPoleAgent, evaluateCartPole
+import cartPoleEnv, cartPoleAgent, evaluateCartPole
 
 
 @dataclass
@@ -29,7 +31,7 @@ class Args:
     """if toggled, cuda will be enabled by default"""
     track: bool = True
     """if toggled, this experiment will be tracked with Weights and Biases"""
-    wandb_project_name: str = "robodogs-cartpole"
+    wandb_project_name: str = "proxy-cartpole"
     """the wandb's project name"""
     wandb_entity: str = None #"robodogs"
     """the entity (team) of wandb's project"""
@@ -37,13 +39,13 @@ class Args:
     """whether to capture videos of the agent performances (check out `videos` folder)"""
 
     # Algorithm specific arguments
-    env_id: str = "CartPoleDomainRand-v0"
+    env_id: str = "CartPoleParam-Proxy-v0" #"CartPoleDomainRand-v0"
     """the id of the environment"""
-    total_timesteps: int = 4000000
+    total_timesteps: int = 8000000
     """total timesteps of the experiments"""
     learning_rate: float = 2.5e-3
     """the learning rate of the optimizer"""
-    num_envs: int = 512
+    num_envs: int = 1024
     """the number of parallel game environments"""
     num_steps: int = 128
     """the number of steps to run in each environment per policy rollout"""
@@ -73,7 +75,7 @@ class Args:
     """the target KL divergence threshold"""
     hidden_size: int = 32
     """the hidden size of the GRU"""
-    mlp_hidden: int = 16
+    mlp_hidden: int = 24
     """the hidden size of the MLP"""
  
 
@@ -92,6 +94,135 @@ class Args:
     """If >0, also save 'last.pt' every N completed episodes (in addition to best)."""
     global_ckpt_dir = f"cartpole/basicExperiments/checkpoints"
 
+import gymnasium as gym
+from gymnasium import spaces
+import numpy as np
+from typing import Any, Callable, Optional, Tuple
+import gymnasium as gym
+from gymnasium import spaces
+import numpy as np
+from typing import Any, Callable, Optional, Tuple
+
+
+class CartPoleParam(gym.envs.classic_control.CartPoleEnv):
+    """
+    A version of CartPoleEnv where physics parameters are randomized on every reset.
+    """
+    def __init__(self, len_range=(0.5, 1.8), mp_range=(0.3, 1.8),
+                 mc_range=(0.5, 2.0), g_range=(8.5, 11.5), **kw):
+        super().__init__(**kw)
+        self.len_range, self.mp_range, self.mc_range, self.g_range = \
+            len_range, mp_range, mc_range, g_range
+        self.x_threshold = 5.0  # extended track
+
+    def _sample_params(self, rng: np.random.RandomState):
+        self.length = rng.uniform(*self.len_range)
+        self.masspole = 1.0
+        self.masscart = rng.uniform(*self.mc_range)
+        self.gravity = 9.81
+        self.total_mass = self.masspole + self.masscart
+        self.polemass_length = self.masspole * self.length
+
+    def reset(self, *, seed: Optional[int] = None, options: Optional[dict] = None) -> Tuple[np.ndarray, dict]:
+        super().reset(seed=seed)
+        param_seed = seed if seed is not None else self.np_random.integers(1 << 31)
+        self._sample_params(np.random.RandomState(param_seed))
+        obs, info = super().reset(seed=seed, options=options)
+        info = dict(info)
+        info.update(dict(length=self.length, masspole=self.masspole,
+                         masscart=self.masscart, gravity=self.gravity))
+        return obs.astype(np.float32), info
+
+    def step(self, action: int) -> Tuple[np.ndarray, float, bool, bool, dict]:
+        obs, reward, terminated, truncated, info = super().step(action)
+        theta = float(obs[2])
+        th_thr = self.theta_threshold_radians
+        terminated = bool(abs(theta) > th_thr)
+        obs[0] = float(np.clip(obs[0], -self.x_threshold, self.x_threshold))
+        return obs.astype(np.float32), float(reward), terminated, truncated, info
+
+
+class SetpointWrapper(gym.Wrapper):
+    """
+    Adds a fixed or sampled target angle (theta_star) internally.
+    Reward encourages maintaining the pole near that angle.
+    The observation is not augmented and theta_star is not returned.
+    """
+    def __init__(self, env: gym.Env, theta_sampler: Callable[[], float],
+                 weights: Tuple[float, float, float, float] = (5.0, 0.5, 0.1, 0.001)):
+        super().__init__(env)
+        self.theta_sampler = theta_sampler
+        self.w_theta, self.w_omega, self.w_x, self.w_a = weights
+        self.theta_star = 0.0
+
+    def reset(self, **kw: Any) -> Tuple[np.ndarray, dict]:
+        obs, info = self.env.reset(**kw)
+        self.theta_star = float(self.theta_sampler())
+        return obs.astype(np.float32), info
+
+    def step(self, action: Any) -> Tuple[np.ndarray, float, bool, bool, dict]:
+        obs, _, term, trunc, info = self.env.step(action)
+        x, xdot, th, thdot = map(float, obs)
+        action_cost = abs(action[0]) if isinstance(action, np.ndarray) else abs(action)
+        r = (- self.w_theta * (th - self.theta_star) ** 2
+             - self.w_omega * thdot ** 2
+             - self.w_a * action_cost)
+        return obs.astype(np.float32), float(r), term, trunc, info
+
+
+class DeviationTerminationWrapper(gym.Wrapper):
+    """
+    Terminates the episode if theta deviates from theta_star by more than tol_deg
+    for `patience` consecutive steps.
+    theta_star is not exposed.
+    """
+    def __init__(self, env: gym.Env, tol_deg: float = 3.0, patience: int = 50):
+        super().__init__(env)
+        self.tol = np.deg2rad(tol_deg)
+        self.patience = patience
+        self.bad_steps = 0
+        self.theta_star = 0.0
+
+    def reset(self, **kw: Any) -> Tuple[np.ndarray, dict]:
+        self.bad_steps = 0
+        obs, info = self.env.reset(**kw)
+        return obs, info
+
+    def step(self, action: Any) -> Tuple[np.ndarray, float, bool, bool, dict]:
+        obs, r, term, trunc, info = self.env.step(action)
+        theta = float(obs[2])
+        if abs(theta - self.theta_star) > self.tol:
+            self.bad_steps += 1
+        else:
+            self.bad_steps = 0
+        if self.bad_steps >= self.patience:
+            term = True
+            info = dict(info)
+            info["terminated_reason"] = "setpoint_deviation"
+            info["deviation_steps"] = self.bad_steps
+        return obs, r, term, trunc, info
+
+
+def make_proxy_env(
+    render_mode: Optional[str] = None,
+    Tc: int = 128,
+    tol_deg: float = 3.0,
+    patience: int = 50,
+    **kwargs
+) -> gym.Env:
+    """
+    Creates the evaluation environment stack without calibration or theta_star in observations.
+    """
+    cartpole_param_keys = ["len_range", "mp_range", "mc_range", "g_range"]
+    cartpole_kwargs = {"render_mode": render_mode}
+    for key in cartpole_param_keys:
+        if key in kwargs:
+            cartpole_kwargs[key] = kwargs[key]
+
+    env = CartPoleParam(**cartpole_kwargs)
+    env = SetpointWrapper(env, theta_sampler=lambda: 0.0)
+    env = DeviationTerminationWrapper(env, tol_deg=tol_deg, patience=patience)
+    return env
 
 def return_config(env: gym.Env):
     base = env.unwrapped
@@ -106,11 +237,18 @@ def return_config(env: gym.Env):
     }
     return cfg
 
+register(
+    id='CartPoleParam-Proxy-v0',
+    entry_point=make_proxy_env,
+    max_episode_steps=1000
+)
+
+
 def pick_device():
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        return torch.device("mps")
+    # if torch.cuda.is_available():
+    #     return torch.device("cuda")
+    # if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+    #     return torch.device("mps")
     return torch.device("cpu")
 
 
@@ -120,11 +258,11 @@ if __name__ == "__main__":
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
     args.num_iterations = args.total_timesteps // args.batch_size
     run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
-    register(
-        id=args.env_id,
-        entry_point=cartPoleEnv.CartPoleCustom,
-        max_episode_steps=500,
-    )
+    # register(
+    #     id=args.env_id,
+    #     entry_point=cartPoleEnv.CartPoleCustom,
+    #     max_episode_steps=500,
+    # )
 
     register(
         id="CartPoleDomainRand-v0",
@@ -154,10 +292,18 @@ if __name__ == "__main__":
     print(f"Using device: {device}")
 
     # env setup
-    envs = gym.vector.SyncVectorEnv(
-        [cartPoleEnv.make_random_env(args.env_id, i, args.capture_video, run_name, change_every=5)
-        for i in range(args.num_envs)]
-    )
+    # envs = gym.vector.SyncVectorEnv(
+    #     [cartPoleEnv.make_random_env(args.env_id, i, args.capture_video, run_name, change_every=5)
+    #     for i in range(args.num_envs)]
+    # )
+    envs = gym.vector.SyncVectorEnv([
+        (lambda seed=i: (lambda:
+            gym.wrappers.RecordEpisodeStatistics(
+                gym.make(args.env_id)#, deque_size=1000
+            )
+        ))()
+        for i in range(args.num_envs)
+    ])
     outer = envs.envs[0] 
     base = outer.unwrapped        # == CartPoleCustom
 
@@ -254,6 +400,10 @@ if __name__ == "__main__":
     next_obs = torch.Tensor(next_obs).to(device)
     next_done = torch.zeros(args.num_envs).to(device)
 
+    # Prelaunch evaluation
+    # rows = evaluateCartPole.evaluate_on_fixed_scenarios(agent, "CartPoleDomainRand-v0", device, 6, video_root=f"videos/{run_name}-eval_prelaunch", seed=args.seed+100)
+
+
     for iteration in range(1, args.num_iterations + 1):
         # Annealing the rate if instructed to do so.
         # h_critic = torch.zeros(1, args.num_envs, 128).to(device)
@@ -288,9 +438,10 @@ if __name__ == "__main__":
             h_critic[:, done_mask] = 0
             rewards[step] = torch.tensor(reward, dtype=torch.float32).to(device).view(-1)
             next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(next_done).to(device)
+
             if "episode" in infos:
                 ep = infos["episode"]
-                ep_r = float(ep["r"].max())
+                ep_r = float(ep["r"].mean())
                 ep_l = int(ep["l"].max())
                 print(f"global_step={global_step}, episodic_return={ep_r}")
 
@@ -445,7 +596,7 @@ if __name__ == "__main__":
 
         global_update_idx += 1
 
-    rows = evaluateCartPole.evaluate_on_fixed_scenarios(agent, args.env_id, device, 6, video_root=f"videos/{run_name}-eval", seed=args.seed+100)
+    rows = evaluateCartPole.evaluate_on_fixed_scenarios(agent, "CartPoleParam-Proxy-v0", device, 6, video_root=f"videos/{run_name}-eval_final", seed=args.seed+100)
     # print("eval/return_mean:", rows["return_mean"], "eval/len_mean:", rows["len_mean"])
 
     # === F) Eval metrics + eval video to W&B ===

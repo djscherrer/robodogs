@@ -7,8 +7,8 @@ import gymnasium as gym
 from torch.distributions import Categorical
 
 
-from cartPole.cartPoleEnv import make_evaluate_env
-from cartPole.cartPoleAgent import Agent
+from cartPoleEnv import make_evaluate_env
+from cartPoleAgent import Agent
 
 @dataclass(frozen=True)
 class EnvConfig:
