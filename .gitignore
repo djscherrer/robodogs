@@ -232,3 +232,6 @@ basicExperiments/cartPole/checkpoints/
 basicExperiments/halfCheetah/checkpoints/
 
 cartPole/basicExperiments/runs/*
+
+**/best.pt
+**/last.pt
