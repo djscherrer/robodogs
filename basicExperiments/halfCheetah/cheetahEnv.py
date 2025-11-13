@@ -21,11 +21,12 @@ class CheetahCustom(HalfCheetahEnv):
         self,
         obs_pad: Optional[int] = None,
         terminate_on_back: bool = True,
+        # ---- Reward for uprightness ----
         min_upright: float = 0.3,       # terminate if cosine(up_world, up_body) < this
         min_torso_h: float = 0.30,      # terminate if torso COM too low
         upright_bonus_k: float = 0.30,  # smoothing weight added to default reward
         upright_bonus_margin: float = 0.0,
-        # ---- new: domain randomization controls ----
+        # ---- Domain randomization controls ----
         change_every: int = 0,          # 0 => no domain randomization; >0 => randomize every N episodes
         morphology_jitter: float = 0.2, # +/- 20% scaling around 1.0 by default
         seed: Optional[int] = None,
@@ -78,7 +79,7 @@ class CheetahCustom(HalfCheetahEnv):
 
         self._world_up = np.array([0.0, 0.0, 1.0], dtype=np.float64)
 
-        # ---- NEW: domain randomization bookkeeping ----
+        # ---- Domain randomization bookkeeping ----
         self.change_every = int(change_every)
         self.morphology_jitter = float(morphology_jitter)
         self._episode_idx = 0
@@ -207,7 +208,6 @@ class CheetahCustom(HalfCheetahEnv):
             bleg_len_scale=sample(), bleg_rad_scale=sample(), bleg_mass_scale=sample(),
         )
         self.set_morphology(**scales)
-        self._apply_morphology()
 
     # ---------- observation helpers ----------
     def _pad(self, obs: np.ndarray) -> np.ndarray:

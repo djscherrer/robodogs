@@ -18,22 +18,22 @@ class Agent(nn.Module):
         super().__init__()
         obs_dim, act_dim = _obs_act_dims_from_any(envs, obs_space, act_space, obs_shape, act_shape)
 
-        # Critic (value function)
+        H = 64
+
         self.critic = nn.Sequential(
-            layer_init(nn.Linear(obs_dim, 64)),
+            layer_init(nn.Linear(obs_dim, H)),
             nn.Tanh(),
-            layer_init(nn.Linear(64, 64)),
+            layer_init(nn.Linear(H, H)),
             nn.Tanh(),
-            layer_init(nn.Linear(64, 1), std=1.0),
+            layer_init(nn.Linear(H, 1), std=1.0),
         )
 
-        # Actor mean network
         self.actor_mean = nn.Sequential(
-            layer_init(nn.Linear(obs_dim, 64)),
+            layer_init(nn.Linear(obs_dim, H)),
             nn.Tanh(),
-            layer_init(nn.Linear(64, 64)),
+            layer_init(nn.Linear(H, H)),
             nn.Tanh(),
-            layer_init(nn.Linear(64, act_dim), std=0.01),
+            layer_init(nn.Linear(H, act_dim), std=0.01),
         )
 
         # Log standard deviation (trainable parameter)

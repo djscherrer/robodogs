@@ -22,7 +22,7 @@ from . import cheetahAgent, cheetahEnv, evaluateCheetah
 class Args:
     exp_name: str = os.path.basename(__file__)[: -len(".py")]
     """the name of this experiment"""
-    seed: int = 1
+    seed: int = 2
     """seed of the experiment"""
     torch_deterministic: bool = True
     """if toggled, `torch.backends.cudnn.deterministic=False`"""
@@ -38,7 +38,7 @@ class Args:
     """whether to capture videos of the agent performances (check out `videos` folder)"""
 
     # Environment Randomization
-    randomize_morphology_every: int = 0
+    randomize_morphology_every: int = 5
     """If >0, randomize morphology every N episodes"""
     morphology_jitter: float = 0.2
     """The amount of jitter to apply when randomizing morphology"""
@@ -54,7 +54,7 @@ class Args:
     """Whether to capture videos during evaluation"""
 
     # Algorithm specific arguments
-    env_id: str = "Cheetah_Recurrent_Static"
+    env_id: str = "Cheetah_Recurrent_Rand5"
     """the id of the environment"""
     total_timesteps: int = 5000000
     """total timesteps of the experiments"""
@@ -102,7 +102,7 @@ class Args:
     """Path to a checkpoint (.pt) to resume from (e.g., checkpoints/NAME/last.pt)."""
     save_every_episodes: int = 0
     """If >0, also save 'last.pt' every N completed episodes (in addition to best)."""
-    global_ckpt_dir = f"cartpole/basicExperiments/checkpoints"
+    global_ckpt_dir = f"checkpoints/halfCheetah"
 
 
 def return_config(env: gym.Env):
@@ -246,7 +246,7 @@ if __name__ == "__main__":
 
     # === Resume from checkpoint if requested (AFTER agent/optimizer/helpers exist) ===
     if args.resume is not None and os.path.isfile(args.resume):
-        ckpt = torch.load(args.resume, map_location=device)
+        ckpt = torch.load(args.resume, map_location=device, weights_only=False)
         agent.load_state_dict(ckpt["state_dict"])
         if "optimizer" in ckpt and ckpt["optimizer"] is not None:
             optimizer.load_state_dict(ckpt["optimizer"])
@@ -519,12 +519,17 @@ if __name__ == "__main__":
                     wandb.log({**eval_summary, "global_step": global_step,
                             "eval/update_idx": global_update_idx})
 
-                    # Log per-scenario table (small)
-                    cols = ["scenario", "return_mean", "return_std", "len_mean", "len_std"]
-                    tb = wandb.Table(columns=cols)
+                    # Log per-scenario statistics
                     for r in rows:
-                        tb.add_data(r["scenario"], r["return_mean"], r["return_std"], r["len_mean"], r["len_std"])
-                    wandb.log({f"eval/table_{eval_tag}": tb})
+                        scen = r["scenario"]              # e.g. "baseline", "torso_lor", ...
+                        wandb.log({
+                            f"eval_meta/return_mean/{scen}": float(r["return_mean"]),
+                            f"eval_meta/len_mean/{scen}":    float(r["len_mean"]),
+                            
+                            f"eval_meta/return_std/{scen}":  float(r["return_std"]),
+                            f"eval_meta/len_std/{scen}":     float(r["len_std"]),
+                            "global_step": global_step,
+                        })
 
                     # Optionally log one short video if present
                     if eval_video_root and os.path.isdir(eval_video_root):
