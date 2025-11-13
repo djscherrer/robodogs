@@ -20,5 +20,5 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["metarl*", "cartPole*"]
+include = ["metarl*", "cartPole*", "basicExperiments*"]
 exclude = ["configs*", "models*", "checkpoints*"]
