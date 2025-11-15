@@ -34,7 +34,7 @@ class Args:
     """the wandb's project name"""
     wandb_entity: str = "robodogs"
     """the entity (team) of wandb's project"""
-    capture_video: bool = False
+    capture_video: bool = True
     """whether to capture videos of the agent performances (check out `videos` folder)"""
 
     # Environment Randomization
@@ -46,11 +46,11 @@ class Args:
     # Evaluation settings
     eval_every: int = 8
     """If >0, evaluate the agent every N updates (default: no evaluation)"""
-    eval_episodes: int = 8
+    eval_episodes: int = 2
     """The number of episodes to run during each evaluation phase"""
     eval_num_envs: int = 8
     """The number of parallel envs to use during evaluation"""
-    eval_capture_video: bool = False
+    eval_capture_video: bool = True
     """Whether to capture videos during evaluation"""
 
     # Algorithm specific arguments
@@ -483,7 +483,7 @@ if __name__ == "__main__":
             try:
                 print("\n=== Running evaluation ===")
                 eval_tag = f"u{global_update_idx:05d}"
-                eval_video_root: Optional[str] = (f"videos/{run_name}-eval/{eval_tag}" if args.eval_capture_video else None)
+                eval_video_root: Optional[str] = (f"videos/{run_name}-eval" if args.eval_capture_video else None)
 
                 rows = evaluateCheetah.evaluate_on_fixed_scenarios(
                     agent,
@@ -493,6 +493,7 @@ if __name__ == "__main__":
                     video_root=eval_video_root,
                     seed=args.seed + 100 + global_update_idx,   # different seed per eval
                     num_envs=args.eval_num_envs,
+                    eval_tag=eval_tag
                 )
 
                 # Summaries

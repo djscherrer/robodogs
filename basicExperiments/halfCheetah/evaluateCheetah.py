@@ -57,19 +57,23 @@ def _apply_embodiment(env: gym.Env, cfg: CheetahEmbodiment) -> None:
     """Forward non-None fields to CheetahCustom.set_morphology and apply once."""
     base = env.unwrapped
     kv = {k: v for k, v in vars(cfg).items() if v is not None}
+    print("[DEBUG] applying embodiment:", kv)
     if kv:
         base.set_morphology(**kv)
         base._apply_morphology()
 
 
-def make_vector_eval_env(env_id: str, num_envs: int, seed: int, video_dir: Optional[str] = None):
+def make_vector_eval_env(env_id: str, num_envs: int, seed: int, video_dir: Optional[str] = None, cfg: Optional[CheetahEmbodiment] = None):
     def thunk(i):
         def _make():
-            return cheetahEnv.make_evaluate_env(
+            env = cheetahEnv.make_evaluate_env(
                 env_id,
-                video_dir=(f"{video_dir}/env{i}" if video_dir else None),
+                video_dir=(f"{video_dir}/env{i}" if (video_dir is not None and i==0)else None), # NOTE: Only capture video on env0
                 seed=seed + i,
             )
+            if cfg is not None:
+                _apply_embodiment(env, cfg)   # apply scenario morphology right here
+            return env
         return _make
     return gym.vector.SyncVectorEnv([thunk(i) for i in range(num_envs)])
 
@@ -89,13 +93,10 @@ def eval_one_config_vector(
     num_envs: int = 8,
     verbose: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    envs = make_vector_eval_env(env_id, num_envs, seed, video_dir)
+    envs = make_vector_eval_env(env_id, num_envs, seed, video_dir, cfg)
     agent_device = next(agent.parameters()).device if isinstance(agent, torch.nn.Module) else torch.device(device)
 
     obs, _ = envs.reset(seed=seed)
-    if cfg is not None:
-        for e in envs.envs:
-            _apply_embodiment(e, cfg)
 
     # recurrent-safe
     h_a = h_c = None
@@ -147,10 +148,10 @@ def eval_one_config_vector(
 def fixed_scenarios() -> List[tuple[str, CheetahEmbodiment]]:
     return [
         ("baseline",            CheetahEmbodiment()),
-        ("torso_longer",        CheetahEmbodiment(torso_len_scale=1.20)),
+        ("torso_longer",        CheetahEmbodiment(torso_len_scale=1.2)),
         ("torso_heavier",       CheetahEmbodiment(torso_mass_scale=1.30)),
-        ("front_legs_long",     CheetahEmbodiment(fleg_len_scale=1.20)),
-        ("back_legs_long",      CheetahEmbodiment(bleg_len_scale=1.20)),
+        ("front_legs_long",     CheetahEmbodiment(fleg_len_scale=1.30)),
+        ("back_legs_long",      CheetahEmbodiment(bleg_len_scale=1.30)),
         ("front_legs_heavy",    CheetahEmbodiment(fleg_mass_scale=1.30)),
         ("back_legs_heavy",     CheetahEmbodiment(bleg_mass_scale=1.30)),
         ("thin_legs",           CheetahEmbodiment(fleg_rad_scale=0.85, bleg_rad_scale=0.85)),
@@ -173,11 +174,12 @@ def evaluate_on_fixed_scenarios(
     video_root: Optional[str] = None,
     seed: int = 0,
     num_envs: int = 8,
+    eval_tag: Optional[str] = None
 ) -> List[dict]:
     rows = []
     for name, cfg in fixed_scenarios():
         print("Evaluating scenario:", name)
-        vdir = f"{video_root}/{name}" if video_root else None
+        vdir = f"{video_root}/{name}/{eval_tag}" if video_root else None
         rets, lens = eval_one_config_vector(
             agent, env_id, device,
             episodes=episodes_per_scenario,
@@ -278,6 +280,7 @@ if __name__ == "__main__":
         episodes_per_scenario=args.episodes_per_scenario,
         video_root=args.video_root,
         seed=args.seed,
+        eval_tag="manual_eval"
     )
     for r in fixed_rows:
         print(r)

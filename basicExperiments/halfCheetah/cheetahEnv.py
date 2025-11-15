@@ -35,6 +35,8 @@ class CheetahCustom(HalfCheetahEnv):
         super().__init__(**kwargs)
         self._geom_size0 = self.model.geom_size.copy()
         self._body_mass0 = self.model.body_mass.copy()
+        self._body_pos0 = self.model.body_pos.copy()
+        self._body_inertia0 = self.model.body_inertia.copy()
 
         # cache common geom/body ids by name (standard HalfCheetah asset names)
         def _gid(nm): return mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, nm)
@@ -127,51 +129,135 @@ class CheetahCustom(HalfCheetahEnv):
         m, d = self.model, self.data
         g0 = self._geom_size0
         m0 = self._body_mass0
+        pos0 = self._body_pos0
+        I0 = self._body_inertia0
         ids = self._ids
         S = self._morphology
 
-        # reset to baseline first (avoid compounding across episodes)
-        m.geom_size[:] = g0
-        m.body_mass[:] = m0
+        # --- reset to baseline first (avoid compounding across episodes) ---
+        m.geom_size[:]    = g0
+        m.body_mass[:]    = m0
+        m.body_pos[:]     = pos0
+        m.body_inertia[:] = I0
 
-        # helpers
+        # --- small helper: scale capsule/cylinder geom size ---
         def _apply_geom_scale(gid: int, len_scale, rad_scale, uni_scale):
             if gid < 0:
                 return
             rs = rad_scale if rad_scale is not None else uni_scale
             ls = len_scale if len_scale is not None else uni_scale
             if rs is not None:
-                m.geom_size[gid, 0] = g0[gid, 0] * float(rs)  # radius for capsule/cylinder
-            # length only for capsule/cylinder
-            if ls is not None and m.geom_type[gid] in (mujoco.mjtGeom.mjGEOM_CAPSULE, mujoco.mjtGeom.mjGEOM_CYLINDER):
-                m.geom_size[gid, 1] = g0[gid, 1] * float(ls)
+                m.geom_size[gid, 0] = g0[gid, 0] * float(rs)  # radius
+            if ls is not None and m.geom_type[gid] in (
+                mujoco.mjtGeom.mjGEOM_CAPSULE,
+                mujoco.mjtGeom.mjGEOM_CYLINDER,
+            ):
+                m.geom_size[gid, 1] = g0[gid, 1] * float(ls)  # half-length
 
         def _apply_body_mass(bid: int, mass_scale):
             if bid < 0 or mass_scale is None:
                 return
             m.body_mass[bid] = m0[bid] * float(mass_scale)
 
-        # ----- torso -----
-        _apply_geom_scale(
-            ids["geom"]["torso"],
-            S.get("torso_len_scale"),
-            S.get("torso_rad_scale"),
-            S.get("torso_scale"),
-        )
-        _apply_body_mass(ids["body"]["torso"], S.get("torso_mass_scale"))
+        def _scale_child_offset(parent_body: str, child_body: str, len_scale: Optional[float]):
+            if len_scale is None or len_scale == 1.0:
+                return
+            pid = ids["body"][parent_body]
+            cid = ids["body"][child_body]
+            if pid < 0 or cid < 0:
+                return
+            # body_pos[cid] is the position of the child frame in *parent* frame
+            v0 = pos0[cid].copy()          # baseline offset
+            m.body_pos[cid] = v0 * float(len_scale)
 
-        # leg-level shortcuts
-        fleg_len = S.get("fleg_len_scale"); fleg_rad = S.get("fleg_rad_scale"); fleg_mass = S.get("fleg_mass_scale")
-        bleg_len = S.get("bleg_len_scale"); bleg_rad = S.get("bleg_rad_scale"); bleg_mass = S.get("bleg_mass_scale")
+        def _eff_len(seg_key: str, leg_len: Optional[float]) -> float:
+            """
+            Effective length scale for a given segment:
+            - use seg-specific <seg>_len_scale if provided
+            - else use leg-level fleg_len_scale / bleg_len_scale if provided
+            - else 1.0 (no scaling)
+            """
+            seg_len = S.get(seg_key)
+            if seg_len is not None:
+                return float(seg_len)
+            if leg_len is not None:
+                return float(leg_len)
+            return 1.0
+        # =========================================================
+        # 1) TORSO: length / radius / mass / inertia + hip anchors
+        # =========================================================
+        torso_gid = ids["geom"]["torso"]
+        torso_bid = ids["body"]["torso"]
 
-        # legacy fallbacks (lowest precedence)
+        torso_len_scale = S.get("torso_len_scale")
+        torso_rad_scale = S.get("torso_rad_scale")
+        torso_uni_scale = S.get("torso_scale")
+
+        # apply geom scaling for torso (visual / collision)
+        _apply_geom_scale(torso_gid, torso_len_scale, torso_rad_scale, torso_uni_scale)
+
+        # choose an effective length scale sL to drive hips + inertia
+        sL = None
+        if torso_len_scale is not None:
+            sL = float(torso_len_scale)
+        elif torso_uni_scale is not None:
+            sL = float(torso_uni_scale)
+
+        if sL is not None:
+            # --- move hip bodies so they sit at the "ends" of the scaled torso ---
+            for name in ("fthigh", "bthigh"):
+                bid = ids["body"][name]
+                if bid < 0:
+                    continue
+                base = pos0[bid].copy()
+                # scale x-offset from torso center
+                base[0] *= sL
+                m.body_pos[bid] = base
+
+            # --- scale torso mass if user did NOT explicitly provide torso_mass_scale ---
+            if S.get("torso_mass_scale") is None:
+                # approx: keep density constant, so mass ∝ length
+                m.body_mass[torso_bid] = m0[torso_bid] * sL
+            else:
+                _apply_body_mass(torso_bid, S.get("torso_mass_scale"))
+
+            # --- scale torso inertia (rod-like approx: I ∝ mass * length^2, mass ∝ length) => I ∝ length^3 ---
+            I_base = I0[torso_bid].copy()
+            I_scale = sL ** 3
+            m.body_inertia[torso_bid] = I_base * I_scale
+
+        else:
+            # no torso length scaling: maybe just a mass scale
+            if S.get("torso_mass_scale") is not None:
+                _apply_body_mass(torso_bid, S.get("torso_mass_scale"))
+
+        # =========================================================
+        # 2) LEGS: keep your previous shortcuts & legacy options
+        # =========================================================
+        fleg_len  = S.get("fleg_len_scale")
+        fleg_rad  = S.get("fleg_rad_scale")
+        fleg_mass = S.get("fleg_mass_scale")
+        bleg_len  = S.get("bleg_len_scale")
+        bleg_rad  = S.get("bleg_rad_scale")
+        bleg_mass = S.get("bleg_mass_scale")
+
         thigh_uni = S.get("thigh_scale")
         shin_uni  = S.get("shin_scale")
         foot_uni  = S.get("foot_scale")
         front_uni = S.get("front_leg_scale")  # size-only
         back_uni  = S.get("back_leg_scale")   # size-only
 
-        # apply per segment for front/back with fallbacks
+        # effective length scales per body
+        fthigh_L = _eff_len("fthigh_len_scale", fleg_len)
+        bthigh_L = _eff_len("bthigh_len_scale", bleg_len)
+        fshin_L  = _eff_len("fshin_len_scale",  fleg_len)
+        bshin_L  = _eff_len("bshin_len_scale",  bleg_len)
+
+        _scale_child_offset("fthigh", "fshin", fthigh_L)
+        _scale_child_offset("bthigh", "bshin", bthigh_L)
+        _scale_child_offset("fshin",  "ffoot",  fshin_L)
+        _scale_child_offset("bshin",  "bfoot",  bshin_L)
+
         for seg in ("thigh", "shin", "foot"):
             # front
             gk = f"f{seg}"
@@ -179,7 +265,6 @@ class CheetahCustom(HalfCheetahEnv):
                 ids["geom"][gk],
                 S.get(f"{gk}_len_scale", fleg_len),
                 S.get(f"{gk}_rad_scale", fleg_rad),
-                # uniform size fallback preference: front_leg_scale > legacy seg scale
                 (front_uni if front_uni is not None else S.get(f"{seg}_scale"))
             )
             _apply_body_mass(ids["body"][gk], S.get(f"{gk}_mass_scale", fleg_mass))
@@ -194,6 +279,7 @@ class CheetahCustom(HalfCheetahEnv):
             )
             _apply_body_mass(ids["body"][gk], S.get(f"{gk}_mass_scale", bleg_mass))
 
+        # recompute kinematics/dynamics after modifications
         mujoco.mj_forward(m, d)
 
     # ---- random morphology sampler (like CartPoleDomainRandEnv._randomize_params) ----
@@ -296,5 +382,5 @@ def make_evaluate_env(env_id: str, video_dir: str | None = None, seed: int = 0):
     env = gym.wrappers.RecordEpisodeStatistics(env)
     if video_dir:
         env = gym.wrappers.RecordVideo(env, video_dir, episode_trigger=lambda _: True)
-    env.reset(seed=seed)
+    # env.reset(seed=seed)
     return env
