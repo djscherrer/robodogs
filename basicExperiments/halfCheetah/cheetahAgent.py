@@ -76,7 +76,7 @@ class Agent(nn.Module):
     
 
 class GRUAgent(nn.Module):
-    def __init__(self, envs=None, *, obs_space=None, act_space=None, obs_shape=None, act_shape=None, hidden_size: int = 128):
+    def __init__(self, envs=None, *, obs_space=None, act_space=None, obs_shape=None, act_shape=None, hidden_size: int = 128, mlp_hidden_size: int = 64):
         super().__init__()
         self.hidden_size = hidden_size
         obs_dim, act_dim = _obs_act_dims_from_any(envs, obs_space, act_space, obs_shape, act_shape)
@@ -85,15 +85,15 @@ class GRUAgent(nn.Module):
         # Critic
         self.gru_Critic = nn.GRU(input_size=obs_dim, hidden_size=hidden_size, batch_first=True)
         self.mlp_Critic = nn.Sequential(
-            layer_init(nn.Linear(hidden_size + obs_dim, 64)), nn.Tanh(),
-            layer_init(nn.Linear(64, 1), std=1.0),
+            layer_init(nn.Linear(hidden_size + obs_dim, mlp_hidden_size)), nn.Tanh(),
+            layer_init(nn.Linear(mlp_hidden_size, 1), std=1.0),
         )
 
         # Actor (Gaussian)
         self.gru_Actor = nn.GRU(input_size=obs_dim, hidden_size=hidden_size, batch_first=True)
         self.mlp_mu = nn.Sequential(
-            layer_init(nn.Linear(hidden_size + obs_dim, 64)), nn.Tanh(),
-            layer_init(nn.Linear(64, act_dim), std=0.01),
+            layer_init(nn.Linear(hidden_size + obs_dim, mlp_hidden_size)), nn.Tanh(),
+            layer_init(nn.Linear(mlp_hidden_size, act_dim), std=0.01),
         )
         # global log_std parameter (you can also predict it per-state if you want)
         self.log_std = nn.Parameter(torch.zeros(act_dim))

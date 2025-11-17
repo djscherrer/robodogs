@@ -15,7 +15,7 @@ import tyro
 
 from gymnasium.vector import AsyncVectorEnv
 from gymnasium.envs.registration import register
-from . import cheetahAgent, cheetahEnv, evaluateCheetah
+from basicExperiments.halfCheetah import cheetahAgent, cheetahEnv, evaluateCheetah
 
 
 @dataclass
@@ -34,13 +34,13 @@ class Args:
     """the wandb's project name"""
     wandb_entity: str = "robodogs"
     """the entity (team) of wandb's project"""
-    capture_video: bool = True
+    capture_video: bool = False
     """whether to capture videos of the agent performances (check out `videos` folder)"""
 
     # Environment Randomization
     randomize_morphology_every: int = 5
     """If >0, randomize morphology every N episodes"""
-    morphology_jitter: float = 0.2
+    morphology_jitter: float = 0.7
     """The amount of jitter to apply when randomizing morphology"""
 
     # Evaluation settings
@@ -88,6 +88,10 @@ class Args:
     """the maximum norm for the gradient clipping"""
     target_kl: float = 0.01
     """the target KL divergence threshold"""
+    gru_hidden_size: int = 128
+    """the hidden size of the GRU"""
+    mlp_hidden_size: int = 64
+    """the hidden size of the MLP"""
 
     # to be filled in runtime
     batch_size: int = 0
@@ -200,7 +204,7 @@ if __name__ == "__main__":
         wandb.config.update({"env_cfg": cfg}, allow_val_change=True)
 
     # GRU Agent init
-    agent = cheetahAgent.GRUAgent(envs).to(device)
+    agent = cheetahAgent.GRUAgent(envs, mlp_hidden_size=args.mlp_hidden_size, hidden_size=args.gru_hidden_size).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
 
     # === Checkpoint directory & trackers ===
@@ -271,14 +275,14 @@ if __name__ == "__main__":
     rewards = torch.zeros((args.num_steps, args.num_envs)).to(device)
     dones = torch.zeros((args.num_steps, args.num_envs)).to(device)
     values = torch.zeros((args.num_steps, args.num_envs)).to(device)
-    H = 128  # GRU hidden size
+    H = args.gru_hidden_size  # GRU hidden size
     h0_actor_buf  = torch.zeros((args.num_steps, args.num_envs, H), device=device)
     h0_critic_buf = torch.zeros((args.num_steps, args.num_envs, H), device=device)
 
 
     # hidden states for GRU
-    h_critic = torch.zeros(1, args.num_envs, 128).to(device)
-    h_actor = torch.zeros(1, args.num_envs, 128).to(device)
+    h_critic = torch.zeros(1, args.num_envs, args.gru_hidden_size).to(device)
+    h_actor = torch.zeros(1, args.num_envs, args.gru_hidden_size).to(device)
 
     # TRY NOT TO MODIFY: start the game
     global_step = 0

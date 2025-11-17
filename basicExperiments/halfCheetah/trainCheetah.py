@@ -17,7 +17,7 @@ import tyro
 
 from gymnasium.vector import AsyncVectorEnv
 from gymnasium.envs.registration import register
-from . import cheetahAgent, cheetahEnv, evaluateCheetah
+from basicExperiments.halfCheetah import cheetahAgent, cheetahEnv, evaluateCheetah
 
 
 @dataclass
@@ -42,7 +42,7 @@ class Args:
     # Environment Randomization (passed to CheetahCustom/make_env)
     randomize_morphology_every: int = 5
     """If >0, randomize morphology every N episodes"""
-    morphology_jitter: float = 0.2
+    morphology_jitter: float = 0.7
     """The amount of jitter to apply when randomizing morphology"""
 
     # Evaluation settings (mirrors recurrent script)
