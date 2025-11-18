@@ -40,7 +40,7 @@ class Args:
     # Environment Randomization
     randomize_morphology_every: int = 5
     """If >0, randomize morphology every N episodes"""
-    morphology_jitter: float = 0.7
+    morphology_jitter: float = 0.5
     """The amount of jitter to apply when randomizing morphology"""
 
     # Evaluation settings
@@ -48,7 +48,7 @@ class Args:
     """If >0, evaluate the agent every N updates (default: no evaluation)"""
     eval_episodes: int = 2
     """The number of episodes to run during each evaluation phase"""
-    eval_num_envs: int = 8
+    eval_num_envs: int = 8  
     """The number of parallel envs to use during evaluation"""
     eval_capture_video: bool = True
     """Whether to capture videos during evaluation"""
@@ -90,7 +90,7 @@ class Args:
     """the target KL divergence threshold"""
     gru_hidden_size: int = 128
     """the hidden size of the GRU"""
-    mlp_hidden_size: int = 64
+    mlp_hidden_size: int = 128
     """the hidden size of the MLP"""
 
     # to be filled in runtime

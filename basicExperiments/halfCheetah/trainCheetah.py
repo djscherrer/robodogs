@@ -42,7 +42,7 @@ class Args:
     # Environment Randomization (passed to CheetahCustom/make_env)
     randomize_morphology_every: int = 5
     """If >0, randomize morphology every N episodes"""
-    morphology_jitter: float = 0.7
+    morphology_jitter: float = 0.5
     """The amount of jitter to apply when randomizing morphology"""
 
     # Evaluation settings (mirrors recurrent script)
