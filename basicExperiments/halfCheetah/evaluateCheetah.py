@@ -57,19 +57,30 @@ def _apply_embodiment(env: gym.Env, cfg: CheetahEmbodiment) -> None:
     """Forward non-None fields to CheetahCustom.set_morphology and apply once."""
     base = env.unwrapped
     kv = {k: v for k, v in vars(cfg).items() if v is not None}
-    print("[DEBUG] applying embodiment:", kv)
     if kv:
         base.set_morphology(**kv)
         base._apply_morphology()
 
 
-def make_vector_eval_env(env_id: str, num_envs: int, seed: int, video_dir: Optional[str] = None, cfg: Optional[CheetahEmbodiment] = None):
+def make_vector_eval_env(
+    env_id: str,
+    num_envs: int,
+    seed: int,
+    video_dir: Optional[str] = None,
+    cfg: Optional[CheetahEmbodiment] = None,
+    proxy_period_steps: int = 32,
+    proxy_training_steps: int = 128,
+    proxy_amplitude: float = 0.10,
+):    
     def thunk(i):
         def _make():
             env = cheetahEnv.make_evaluate_env(
                 env_id,
                 video_dir=(f"{video_dir}/env{i}" if (video_dir is not None and i==0)else None), # NOTE: Only capture video on env0
                 seed=seed + i,
+                proxy_period_steps=proxy_period_steps,
+                proxy_training_steps=proxy_training_steps,
+                proxy_amplitude=proxy_amplitude,
             )
             if cfg is not None:
                 _apply_embodiment(env, cfg)   # apply scenario morphology right here
@@ -92,8 +103,11 @@ def eval_one_config_vector(
     seed: int = 0,
     num_envs: int = 8,
     verbose: bool = False,
+    proxy_period_steps: int = 32,
+    proxy_training_steps: int = 128,
+    proxy_amplitude: float = 0.10,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    envs = make_vector_eval_env(env_id, num_envs, seed, video_dir, cfg)
+    envs = make_vector_eval_env(env_id, num_envs, seed, video_dir, cfg, proxy_period_steps, proxy_training_steps, proxy_amplitude)
     agent_device = next(agent.parameters()).device if isinstance(agent, torch.nn.Module) else torch.device(device)
 
     obs, _ = envs.reset(seed=seed)
@@ -148,21 +162,24 @@ def eval_one_config_vector(
 def fixed_scenarios() -> List[tuple[str, CheetahEmbodiment]]:
     return [
         ("baseline",            CheetahEmbodiment()),
-        ("torso_longer",        CheetahEmbodiment(torso_len_scale=1.2)),
-        ("torso_heavier",       CheetahEmbodiment(torso_mass_scale=1.30)),
-        ("front_legs_long",     CheetahEmbodiment(fleg_len_scale=1.30)),
-        ("back_legs_long",      CheetahEmbodiment(bleg_len_scale=1.30)),
-        ("front_legs_heavy",    CheetahEmbodiment(fleg_mass_scale=1.30)),
-        ("back_legs_heavy",     CheetahEmbodiment(bleg_mass_scale=1.30)),
-        ("thin_legs",           CheetahEmbodiment(fleg_rad_scale=0.85, bleg_rad_scale=0.85)),
-        ("chunky_feet",         CheetahEmbodiment(ffoot_rad_scale=1.15, bfoot_rad_scale=1.15)),
-        ("long_shins_only",     CheetahEmbodiment(fshin_len_scale=1.20, bshin_len_scale=1.20)),
-        ("short_stout_torso",   CheetahEmbodiment(torso_len_scale=0.85, torso_rad_scale=1.10)),
-        ("asym_long_FshortB",   CheetahEmbodiment(fleg_len_scale=1.20, bleg_len_scale=0.85)),
-        ("asym_heavy_FlightB",  CheetahEmbodiment(fleg_mass_scale=1.30, bleg_mass_scale=0.80)),
-        ("front_long_heavy",    CheetahEmbodiment(fleg_len_scale=1.20, fleg_mass_scale=1.20)),
-        ("back_long_heavy",     CheetahEmbodiment(bleg_len_scale=1.20, bleg_mass_scale=1.20)),
-        ("torso_uniform_big",   CheetahEmbodiment(torso_scale=1.15, torso_mass_scale=1.15)),
+        ("torso_uniform_big",   CheetahEmbodiment(torso_scale=1.3, torso_mass_scale=1.3)),
+        ("torso_longer",        CheetahEmbodiment(torso_len_scale=1.3, torso_rad_scale=1.20)),
+        ("torso_shorter",       CheetahEmbodiment(torso_len_scale=0.7, torso_rad_scale=0.8)),
+        ("torso_heavier",       CheetahEmbodiment(torso_mass_scale=1.3)),
+        ("torso_lighter",       CheetahEmbodiment(torso_mass_scale=0.7)),
+
+        ("front_legs_long",     CheetahEmbodiment(fleg_len_scale=1.3)),
+        ("back_legs_long",      CheetahEmbodiment(bleg_len_scale=1.3)),
+        ("front_legs_heavy",    CheetahEmbodiment(fleg_mass_scale=1.3)),
+        ("back_legs_heavy",     CheetahEmbodiment(bleg_mass_scale=1.3)),
+        ("thin_legs",           CheetahEmbodiment(fleg_rad_scale=0.75, bleg_rad_scale=0.75)),
+        ("chunky_feet",         CheetahEmbodiment(ffoot_rad_scale=1.3, bfoot_rad_scale=1.3)),
+        ("long_shins_only",     CheetahEmbodiment(fshin_len_scale=1.3, bshin_len_scale=1.3)),
+        
+        ("asym_longF_shortB",   CheetahEmbodiment(fleg_len_scale=1.2, bleg_len_scale=0.8)),
+        ("asym_heavyF_lightB",  CheetahEmbodiment(fleg_mass_scale=1.3, bleg_mass_scale=0.8)),
+        ("front_long_heavy",    CheetahEmbodiment(fleg_len_scale=1.3, fleg_mass_scale=1.3)),
+        ("back_long_heavy",     CheetahEmbodiment(bleg_len_scale=1.3, bleg_mass_scale=1.3)),
     ]
 
 
@@ -174,7 +191,12 @@ def evaluate_on_fixed_scenarios(
     video_root: Optional[str] = None,
     seed: int = 0,
     num_envs: int = 8,
-    eval_tag: Optional[str] = None
+    eval_tag: Optional[str] = None,
+    isTargetTask: bool = True,
+    # proxy task params
+    proxy_period_steps: int = 32,
+    proxy_training_steps: int = 128,
+    proxy_amplitude: float = 0.10,
 ) -> List[dict]:
     rows = []
     for name, cfg in fixed_scenarios():
@@ -183,7 +205,10 @@ def evaluate_on_fixed_scenarios(
         rets, lens = eval_one_config_vector(
             agent, env_id, device,
             episodes=episodes_per_scenario,
-            cfg=cfg, video_dir=vdir, seed=seed, num_envs=num_envs
+            cfg=cfg, video_dir=vdir, seed=seed, num_envs=num_envs, 
+            proxy_period_steps=proxy_period_steps,
+            proxy_training_steps=proxy_training_steps,
+            proxy_amplitude=proxy_amplitude,
         )
         row = {
             "scenario": name,
@@ -231,6 +256,10 @@ def evaluate_on_random_configs(
     video_root: Optional[str] = None,
     seed: int = 0,
     num_envs: int = 8,
+    # proxy task params
+    proxy_period_steps: int = 32,
+    proxy_training_steps: int = 128,
+    proxy_amplitude: float = 0.10,
 ) -> List[dict]:
     rows = []
     cfgs = sample_embodiments(n_configs, seed)
@@ -240,7 +269,10 @@ def evaluate_on_random_configs(
         rets, lens = eval_one_config_vector(
             agent, env_id, device,
             episodes=episodes_per_config,
-            cfg=cfg, video_dir=vdir, seed=seed + i + 1, num_envs=num_envs
+            cfg=cfg, video_dir=vdir, seed=seed + i + 1, num_envs=num_envs,
+            proxy_period_steps=proxy_period_steps,
+            proxy_training_steps=proxy_training_steps,
+            proxy_amplitude=proxy_amplitude,
         )
         row = {
             "scenario": name,

@@ -20,7 +20,7 @@ from basicExperiments.halfCheetah import cheetahAgent, cheetahEnv, evaluateCheet
 
 @dataclass
 class Args:
-    exp_name: str = os.path.basename(__file__)[: -len(".py")]
+    exp_name: str = "Cheetah_Recurrent_Rand5_ProxyOnly_256s"
     """the name of this experiment"""
     seed: int = 2
     """seed of the experiment"""
@@ -53,8 +53,24 @@ class Args:
     eval_capture_video: bool = True
     """Whether to capture videos during evaluation"""
 
+    # Proxy task settings training
+    proxy_training_steps: int = 512
+    """Number of steps over which to train on proxy task before switching to main task"""
+    proxy_period_steps: int = 64
+    """Number of steps for one full sine wave period"""
+    proxy_amplitude: float = 0.10 
+    """Amplitude of the proxy sine wave relative to inital torso height"""
+
+    # Proxy task settings evaluation
+    eval_proxy_training_steps: int = 10000
+    """Number of steps over which to train on proxy task before switching to main task during evaluation"""
+    eval_proxy_period_steps: int = 64
+    """Number of steps for one full sine wave period during evaluation"""
+    eval_proxy_amplitude: float = 0.10
+    """Amplitude of the proxy sine wave during evaluation"""
+
     # Algorithm specific arguments
-    env_id: str = "Cheetah_Recurrent_Rand5"
+    env_id: str = "Cheetah_Recurrent"
     """the id of the environment"""
     total_timesteps: int = 5000000
     """total timesteps of the experiments"""
@@ -62,7 +78,7 @@ class Args:
     """the learning rate of the optimizer"""
     num_envs: int = 32
     """the number of parallel game environments"""
-    num_steps: int = 256
+    num_steps: int = 512
     """the number of steps to run in each environment per policy rollout"""
     anneal_lr: bool = True
     """Toggle learning rate annealing for policy and value networks"""
@@ -164,7 +180,7 @@ if __name__ == "__main__":
 
     # env setup
     env_fns = [
-        cheetahEnv.make_env(args.env_id, i, args.capture_video, run_name, args.randomize_morphology_every, args.morphology_jitter)
+        cheetahEnv.make_env(args.env_id, i, args.capture_video, run_name, args.proxy_period_steps, args.proxy_training_steps, args.proxy_amplitude, args.randomize_morphology_every, args.morphology_jitter)
         for i in range(args.num_envs)
     ]
 
@@ -497,7 +513,10 @@ if __name__ == "__main__":
                     video_root=eval_video_root,
                     seed=args.seed + 100 + global_update_idx,   # different seed per eval
                     num_envs=args.eval_num_envs,
-                    eval_tag=eval_tag
+                    eval_tag=eval_tag,
+                    proxy_period_steps=args.eval_proxy_period_steps,
+                    proxy_training_steps=args.eval_proxy_training_steps,
+                    proxy_amplitude=args.eval_proxy_amplitude,
                 )
 
                 # Summaries

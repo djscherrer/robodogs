@@ -26,6 +26,10 @@ class CheetahCustom(HalfCheetahEnv):
         min_torso_h: float = 0.30,      # terminate if torso COM too low
         upright_bonus_k: float = 0.30,  # smoothing weight added to default reward
         upright_bonus_margin: float = 0.0,
+        # ---- Proxy task settings ----
+        proxy_period_steps: int = 32,
+        proxy_training_steps: int = 128,  # duration over which proxy is learned
+        proxy_amplitude: float = 0.10,
         # ---- Domain randomization controls ----
         change_every: int = 0,          # 0 => no domain randomization; >0 => randomize every N episodes
         morphology_jitter: float = 0.2, # +/- 20% scaling around 1.0 by default
@@ -56,16 +60,17 @@ class CheetahCustom(HalfCheetahEnv):
 
         # ---- obs settings ----
         self.obs_pad = obs_pad
-        base_shape = self.observation_space.shape
-        if obs_pad is None:
-            self.observation_space = gym.spaces.Box(
-                low=-np.inf, high=np.inf, shape=base_shape, dtype=np.float32
-            )
-        else:
-            self.observation_space = gym.spaces.Box(
-                low=-np.inf, high=np.inf, shape=(obs_pad,), dtype=np.float32
-            )
+        orig_shape = self.observation_space.shape
 
+        if isinstance(orig_shape, (int, np.integer)):
+            orig_dim = int(orig_shape)
+        else:
+            # Gym / Gymnasium Box normally uses a tuple, e.g. (17,)
+            assert len(orig_shape) == 1, f"Expected 1D obs, got shape={orig_shape}"
+            orig_dim = int(orig_shape[0])
+
+        base_dim = orig_dim + 6  # [task flag, torso_h, phase_sin, phase_cos]
+        self.observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(base_dim or obs_pad,), dtype=np.float32)
         # ---- morphology / shaping settings ----
         self._morphology: Dict[str, float] = {}  # name->scale
         self.terminate_on_back = bool(terminate_on_back)
@@ -86,6 +91,14 @@ class CheetahCustom(HalfCheetahEnv):
         self.morphology_jitter = float(morphology_jitter)
         self._episode_idx = 0
         self.np_random, _ = seeding.np_random(seed)
+
+        # ---- Proxy task reward ----
+        self.proxy_period_time = proxy_period_steps * self.dt    
+        self.proxy_learning_time = proxy_training_steps * self.dt
+        self.proxy_amp_relative = float(proxy_amplitude)
+        self.proxy_amp_morphology = None  # to be set on reset
+        self.proxy_center = None
+        
 
     # ---------- utilities ----------
     def _upright_and_height(self):
@@ -215,11 +228,10 @@ class CheetahCustom(HalfCheetahEnv):
                 m.body_pos[bid] = base
 
             # --- scale torso mass if user did NOT explicitly provide torso_mass_scale ---
-            if S.get("torso_mass_scale") is None:
-                # approx: keep density constant, so mass ∝ length
-                m.body_mass[torso_bid] = m0[torso_bid] * sL
-            else:
-                _apply_body_mass(torso_bid, S.get("torso_mass_scale"))
+            if S.get("torso_mass_scale") is not None:
+                _apply_body_mass(torso_bid, S.get("torso_mass_scale")) 
+            else: 
+                _apply_body_mass(torso_bid, sL)
 
             # --- scale torso inertia (rod-like approx: I ∝ mass * length^2, mass ∝ length) => I ∝ length^3 ---
             I_base = I0[torso_bid].copy()
@@ -296,14 +308,40 @@ class CheetahCustom(HalfCheetahEnv):
         self.set_morphology(**scales)
 
     # ---------- observation helpers ----------
-    def _pad(self, obs: np.ndarray) -> np.ndarray:
+    def _add_obs_and_pad(self, obs: np.ndarray) -> np.ndarray:
+        """
+        Append the proxy/main flag to obs, then optionally pad.
+        Flag = 0.0 → proxy task phase
+        Flag = 1.0 → main task phase
+        """
         obs = obs.astype(np.float32, copy=False)
+        t = float(self.data.time)
+
+        # Determine current task
+        flag = 0.0 if t <= self.proxy_learning_time else 1.0
+
+        # Current height + linear velocity
+        torso_h = float(self.data.xpos[self._torso_bid][2])
+        v6 = self.data.cvel[self._torso_bid]   # shape (6,)
+        v_lin = np.asarray(v6[3:] , dtype=np.float32)
+
+        # Target height for current time
+        target_h = float(self.proxy_center + self.proxy_amp_morphology * np.sin(2.0 * np.pi * t / self.proxy_period_time))
+
+        extras = np.array(
+            [flag, torso_h, target_h, v_lin[0], v_lin[1], v_lin[2]],
+            dtype=np.float32,
+        )
+
+        obs = np.concatenate([obs, extras], axis=0)
+
+        # Padding logic (unchanged)
         if self.obs_pad is None:
             return obs
-        d = self.obs_pad
-        if obs.shape[0] >= d:
-            return obs[:d]
-        out = np.zeros((d,), dtype=np.float32)
+        if obs.shape[0] >= self.obs_pad:
+            return obs[: self.obs_pad]
+
+        out = np.zeros((self.obs_pad,), dtype=np.float32)
         out[: obs.shape[0]] = obs
         return out
 
@@ -330,8 +368,26 @@ class CheetahCustom(HalfCheetahEnv):
         # morphology is already applied in _randomize_morphology();
         # if you ever call set_morphology manually, this keeps it consistent:
         self._apply_morphology()
-        return self._pad(obs), info
 
+        # Proxy Reward center initialization
+        self.proxy_center = float(self.data.xpos[self._torso_bid][2])
+        self.proxy_amp_morphology = self.proxy_amp_relative * self.proxy_center
+        return self._add_obs_and_pad(obs), info
+    
+    def get_proxy_reward(self, torso_h: float) -> float:
+        """
+        Sinusoidal tracking reward on torso height.
+        r = - (h - h_target(t))^2  (optionally scaled)
+        """
+        t = float(self.data.time)
+
+        # target height according to sine
+        target_h = self.proxy_center + self.proxy_amp_morphology * np.sin(2.0 * np.pi * t / self.proxy_period_time)
+
+        # Quadratic penalty
+        err = torso_h - target_h
+        return - 100 * float(err * err)
+    
     def step(self, action: np.ndarray):
         obs, rew, term, trunc, info = super().step(action)
 
@@ -343,7 +399,15 @@ class CheetahCustom(HalfCheetahEnv):
         # stability shaping
         denom = (1.0 - self.upright_bonus_margin + 1e-8)
         upright_piece = max(0.0, (up - self.upright_bonus_margin)) / denom
-        rew = float(rew + self.upright_bonus_k * upright_piece)
+
+        # If in training 
+        if (float(self.data.time) <= self.proxy_learning_time):
+            # proxy task reward + upright bonus
+            rew = float(self.get_proxy_reward(h))
+        else:
+            # default forward reward + upright bonus
+            rew = float(rew + self.upright_bonus_k * upright_piece)
+            
 
         # early termination when clearly on back / collapsed
         fell = (up < self.min_upright) or (h < self.min_torso_h)
@@ -353,18 +417,18 @@ class CheetahCustom(HalfCheetahEnv):
         else:
             info["terminated_back"] = False
 
-        return self._pad(obs), rew, term, trunc, info
+        return self._add_obs_and_pad(obs), rew, term, trunc, info
 
 
 # --- vector/eval helpers ---
-def make_env(env_id: str, idx: int, capture_video: bool, run_name: str, change_every: int = 0, morphology_jitter: float = 0.2):
+def make_env(env_id: str, idx: int, capture_video: bool, run_name: str, proxy_period_steps: int, proxy_training_steps: int, proxy_amplitude: float, change_every: int = 0, morphology_jitter: float = 0.2):
     """
     Default env factory. `change_every=0` means no domain randomization.
     To enable domain randomization, pass change_every>0 from your training script.
     """
     def thunk():
         rm = "rgb_array" if (capture_video and idx == 0) else None
-        env = CheetahCustom(render_mode=rm, change_every=change_every, morphology_jitter=morphology_jitter)
+        env = CheetahCustom(render_mode=rm, change_every=change_every, morphology_jitter=morphology_jitter, proxy_period_steps=proxy_period_steps, proxy_training_steps=proxy_training_steps, proxy_amplitude=proxy_amplitude)
         env = gym.wrappers.RecordEpisodeStatistics(env)
         if capture_video and idx == 0:
             env = gym.wrappers.RecordVideo(
@@ -376,9 +440,15 @@ def make_env(env_id: str, idx: int, capture_video: bool, run_name: str, change_e
     return thunk
 
 
-def make_evaluate_env(env_id: str, video_dir: str | None = None, seed: int = 0):
+def make_evaluate_env(env_id: str, video_dir: str | None = None, seed: int = 0, proxy_period_steps: int = 32, proxy_training_steps: int = 128, proxy_amplitude: float = 0.10):
     rm = "rgb_array" if video_dir else None
-    env = gym.make(env_id, render_mode=rm)
+    env = gym.make(
+        env_id,
+        render_mode=rm,
+        proxy_period_steps=proxy_period_steps,
+        proxy_training_steps=proxy_training_steps,
+        proxy_amplitude=proxy_amplitude,
+    )
     env = gym.wrappers.RecordEpisodeStatistics(env)
     if video_dir:
         env = gym.wrappers.RecordVideo(env, video_dir, episode_trigger=lambda _: True)
