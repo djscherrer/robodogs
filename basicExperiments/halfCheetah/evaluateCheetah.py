@@ -117,8 +117,12 @@ def eval_one_config_vector(
     hidden = getattr(agent, "hidden_size", 128)
 
     ret = np.zeros(num_envs, dtype=np.float32)
+    ret_proxy = np.zeros(num_envs, dtype=np.float32)
+    ret_real = np.zeros(num_envs, dtype=np.float32)
     length = np.zeros(num_envs, dtype=np.int32)
     done_R: List[float] = []
+    done_R_proxy : List[float] = []
+    done_R_real : List[float] = []
     done_L: List[int] = []
 
     while len(done_R) < episodes:
@@ -132,10 +136,14 @@ def eval_one_config_vector(
             action, _, _, _ = agent.get_action_and_value(x, action=None)
 
         a = action.detach().cpu().numpy()
-        obs, reward, term, trunc, _ = envs.step(a)
+        obs, reward, term, trunc, info = envs.step(a)
         done = np.logical_or(term, trunc)
 
         ret += reward.astype(np.float32)
+        if "current_proxy_reward" in info:
+            ret_proxy += info["current_proxy_reward"].astype(np.float32)
+        if "current_real_reward" in info:
+            ret_real += info["current_real_reward"].astype(np.float32)
         length += 1
 
         if done.any():
@@ -146,14 +154,18 @@ def eval_one_config_vector(
             for i in np.where(done)[0]:
                 done_R.append(float(ret[i]))
                 done_L.append(int(length[i]))
+                done_R_proxy.append(float(ret_proxy[i]))
+                done_R_real.append(float(ret_real[i]))
                 ret[i] = 0.0
+                ret_proxy[i] = 0.0
+                ret_real[i] = 0.0
                 length[i] = 0
 
         if verbose and len(done_R) % max(1, (episodes // 10)) == 0 and len(done_R) > 0:
             print(f"\r[eval] {len(done_R)}/{episodes} episodes, mean_return={np.mean(done_R):.1f}", end="")
 
     envs.close()
-    return np.array(done_R[:episodes], dtype=np.float32), np.array(done_L[:episodes], dtype=np.int32)
+    return np.array(done_R[:episodes], dtype=np.float32), np.array(done_L[:episodes], dtype=np.int32), np.array(done_R_proxy[:episodes], dtype=np.float32), np.array(done_R_real[:episodes], dtype=np.float32)
 
 
 # -------------------------
@@ -202,7 +214,7 @@ def evaluate_on_fixed_scenarios(
     for name, cfg in fixed_scenarios():
         print("Evaluating scenario:", name)
         vdir = f"{video_root}/{name}/{eval_tag}" if video_root else None
-        rets, lens = eval_one_config_vector(
+        rets, lens, rets_proxy, rets_real = eval_one_config_vector(
             agent, env_id, device,
             episodes=episodes_per_scenario,
             cfg=cfg, video_dir=vdir, seed=seed, num_envs=num_envs, 
@@ -216,6 +228,10 @@ def evaluate_on_fixed_scenarios(
             "return_std": float(rets.std(ddof=1) if len(rets) > 1 else 0.0),
             "len_mean": float(lens.mean()),
             "len_std": float(lens.std(ddof=1) if len(lens) > 1 else 0.0),
+            "proxy_return_mean": float(rets_proxy.mean()),
+            "proxy_return_std": float(rets_proxy.std(ddof=1) if len(rets_proxy) > 1 else 0.0),
+            "real_return_mean": float(rets_real.mean()),
+            "real_return_std": float(rets_real.std(ddof=1) if len(rets_real) > 1 else 0.0),
         }
         # store exact embodiment used (handy for CSV/W&B)
         row.update({k: (getattr(cfg, k) if getattr(cfg, k) is not None else None) for k in vars(cfg)})
@@ -266,7 +282,7 @@ def evaluate_on_random_configs(
     for i, cfg in enumerate(cfgs):
         name = f"rand_{i:03d}"
         vdir = f"{video_root}/{name}" if video_root else None
-        rets, lens = eval_one_config_vector(
+        rets, lens, rets_proxy, rets_real = eval_one_config_vector(
             agent, env_id, device,
             episodes=episodes_per_config,
             cfg=cfg, video_dir=vdir, seed=seed + i + 1, num_envs=num_envs,

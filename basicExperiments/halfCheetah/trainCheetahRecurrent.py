@@ -28,7 +28,7 @@ class Args:
     """if toggled, `torch.backends.cudnn.deterministic=False`"""
     cuda: bool = False
     """if toggled, cuda will be enabled by default"""
-    track: bool = True
+    track: bool = False
     """if toggled, this experiment will be tracked with Weights and Biases"""
     wandb_project_name: str = "robodogs-cheetah"
     """the wandb's project name"""
@@ -345,13 +345,22 @@ if __name__ == "__main__":
                 ep = infos["episode"]
                 ep_r = float(ep["r"].max())
                 ep_l = int(ep["l"].max())
-                print(f"global_step={global_step}, episodic_return={ep_r}")
+                proxy_r = infos.get("proxy_return", None)
+                proxy_r = proxy_r[proxy_r != 0]
+                proxy_r = proxy_r.mean() if proxy_r.size > 0 else 0.0
+
+                real_r = infos.get("real_return", None)
+                real_r = real_r[real_r != 0]
+                real_r = real_r.mean() if real_r.size > 0 else 0.0
+                print(f"global_step={global_step}, episodic_return={ep_r}, episodic_length={ep_l}, proxy_return={proxy_r}, real_return={real_r}")
 
                 if args.track:
                     wandb.log(
                         {
                             "charts/episodic_return": ep_r,
                             "charts/episodic_length": ep_l,
+                            "charts/proxy_return": proxy_r,
+                            "charts/real_return": real_r,
                             "global_step": global_step,
                         }
                     )
@@ -522,11 +531,17 @@ if __name__ == "__main__":
                 # Summaries
                 ret_means = np.array([r["return_mean"] for r in rows], dtype=np.float64)
                 len_means = np.array([r["len_mean"] for r in rows], dtype=np.float64)
+                ret_mean_proxy = np.array([r.get("proxy_return_mean", 0.0) for r in rows], dtype=np.float64)
+                ret_mean_real = np.array([r.get("real_return_mean", 0.0) for r in rows], dtype=np.float64)
                 eval_summary = {
                     "eval/return_mean_over_scenarios": float(ret_means.mean()),
                     "eval/return_std_over_scenarios":  float(ret_means.std(ddof=1) if len(ret_means) > 1 else 0.0),
                     "eval/len_mean_over_scenarios":    float(len_means.mean()),
                     "eval/len_std_over_scenarios":     float(len_means.std(ddof=1) if len(len_means) > 1 else 0.0),
+                    "eval/return_mean_over_scenarios_proxy": float(ret_mean_proxy.mean()),
+                    "eval/return_std_over_scenarios_proxy":  float(ret_mean_proxy.std(ddof=1) if len(ret_mean_proxy) > 1 else 0.0),
+                    "eval/return_mean_over_scenarios_real": float(ret_mean_real.mean()),
+                    "eval/return_std_over_scenarios_real":  float(ret_mean_real.std(ddof=1) if len(ret_mean_real) > 1 else 0.0),
                 }
 
                 print(f"\n[eval @ update {global_update_idx}] "
@@ -552,6 +567,11 @@ if __name__ == "__main__":
                             
                             f"eval_meta/return_std/{scen}":  float(r["return_std"]),
                             f"eval_meta/len_std/{scen}":     float(r["len_std"]),
+
+                            f"eval_meta/return_mean_proxy/{scen}": float(r.get("proxy_return_mean", 0.0)),
+                            f"eval_meta/return_mean_real/{scen}": float(r.get("real_return_mean", 0.0)),
+                            f"eval_meta/return_std_proxy/{scen}": float(r.get("proxy_return_std", 0.0)),
+                            f"eval_meta/return_std_real/{scen}": float(r.get("real_return_std", 0.0)),
                             "global_step": global_step,
                         })
 
@@ -575,12 +595,18 @@ if __name__ == "__main__":
     # ---- Summaries over scenarios ----
     ret_means = np.array([r["return_mean"] for r in rows], dtype=np.float64)
     len_means = np.array([r["len_mean"] for r in rows], dtype=np.float64)
+    ret_mean_proxy = np.array([r.get("proxy_return_mean", 0.0) for r in rows], dtype=np.float64)
+    ret_mean_real = np.array([r.get("real_return_mean", 0.0) for r in rows], dtype=np.float64)
 
     summary = {
         "eval/return_mean_over_scenarios": float(ret_means.mean()),
         "eval/return_std_over_scenarios":  float(ret_means.std(ddof=1) if len(ret_means) > 1 else 0.0),
         "eval/len_mean_over_scenarios":    float(len_means.mean()),
         "eval/len_std_over_scenarios":     float(len_means.std(ddof=1) if len(len_means) > 1 else 0.0),
+        "eval/return_mean_over_scenarios_proxy": float(ret_mean_proxy.mean()),
+        "eval/return_std_over_scenarios_proxy":  float(ret_mean_proxy.std(ddof=1) if len(ret_mean_proxy) > 1 else 0.0),
+        "eval/return_mean_over_scenarios_real": float(ret_mean_real.mean()),
+        "eval/return_std_over_scenarios_real":  float(ret_mean_real.std(ddof=1) if len(ret_mean_real) > 1 else 0.0),
     }
 
     print("\n=== Eval summary (over scenarios) ===")

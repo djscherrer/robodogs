@@ -98,6 +98,9 @@ class CheetahCustom(HalfCheetahEnv):
         self.proxy_amp_relative = float(proxy_amplitude)
         self.proxy_amp_morphology = None  # to be set on reset
         self.proxy_center = None
+
+        self._proxy_return = 0.0
+        self._real_return = 0.0
         
 
     # ---------- utilities ----------
@@ -352,6 +355,8 @@ class CheetahCustom(HalfCheetahEnv):
         seed: Optional[int] = None,
         options: Optional[Dict[str, Any]] = None,
     ):
+        self._proxy_return = 0.0
+        self._real_return = 0.0
         # keep vector-env seeding compatible
         if seed is not None:
             self.np_random, _ = seeding.np_random(seed)
@@ -404,10 +409,13 @@ class CheetahCustom(HalfCheetahEnv):
         if (float(self.data.time) <= self.proxy_learning_time):
             # proxy task reward + upright bonus
             rew = float(self.get_proxy_reward(h))
+            self._proxy_return += rew
+            info["current_proxy_reward"] = rew
         else:
             # default forward reward + upright bonus
             rew = float(rew + self.upright_bonus_k * upright_piece)
-            
+            self._real_return += rew
+            info["current_real_reward"] = rew
 
         # early termination when clearly on back / collapsed
         fell = (up < self.min_upright) or (h < self.min_torso_h)
@@ -416,6 +424,13 @@ class CheetahCustom(HalfCheetahEnv):
             info["terminated_back"] = True
         else:
             info["terminated_back"] = False
+
+        
+
+        # episode return logging
+        if term or trunc:
+            info["proxy_return"] = self._proxy_return
+            info["real_return"] = self._real_return
 
         return self._add_obs_and_pad(obs), rew, term, trunc, info
 
