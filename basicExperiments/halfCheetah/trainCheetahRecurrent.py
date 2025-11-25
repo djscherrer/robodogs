@@ -54,7 +54,7 @@ class Args:
     """Whether to capture videos during evaluation"""
 
     # Proxy task settings training
-    proxy_training_steps: int = 512
+    proxy_training_steps: int = 256
     """Number of steps over which to train on proxy task before switching to main task"""
     proxy_period_steps: int = 64
     """Number of steps for one full sine wave period"""
@@ -62,7 +62,7 @@ class Args:
     """Amplitude of the proxy sine wave relative to inital torso height"""
 
     # Proxy task settings evaluation
-    eval_proxy_training_steps: int = 10000
+    eval_proxy_training_steps: int = 256
     """Number of steps over which to train on proxy task before switching to main task during evaluation"""
     eval_proxy_period_steps: int = 64
     """Number of steps for one full sine wave period during evaluation"""
@@ -546,7 +546,9 @@ if __name__ == "__main__":
 
                 print(f"\n[eval @ update {global_update_idx}] "
                     f"mean_ret={eval_summary['eval/return_mean_over_scenarios']:.2f} "
-                    f"std_ret={eval_summary['eval/return_std_over_scenarios']:.2f}")
+                    f"std_ret={eval_summary['eval/return_std_over_scenarios']:.2f}"
+                    f"mean_ret_proxy={eval_summary['eval/return_mean_over_scenarios_proxy']:.2f} "
+                    f"mean_ret_real={eval_summary['eval/return_mean_over_scenarios_real']:.2f}")
 
                 # Optional: treat eval mean as "best" gate too
                 if eval_summary["eval/return_mean_over_scenarios"] > best_return:
