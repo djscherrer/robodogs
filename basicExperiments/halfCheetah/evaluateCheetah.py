@@ -71,6 +71,7 @@ def make_vector_eval_env(
     proxy_period_steps: int = 32,
     proxy_training_steps: int = 128,
     proxy_amplitude: float = 0.10,
+    reset_after_proxy: bool = False,
 ):    
     def thunk(i):
         def _make():
@@ -81,6 +82,7 @@ def make_vector_eval_env(
                 proxy_period_steps=proxy_period_steps,
                 proxy_training_steps=proxy_training_steps,
                 proxy_amplitude=proxy_amplitude,
+                reset_after_proxy=reset_after_proxy,
             )
             if cfg is not None:
                 _apply_embodiment(env, cfg)   # apply scenario morphology right here
