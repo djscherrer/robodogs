@@ -99,6 +99,7 @@ def eval_one_config_vector(
     device: torch.device | str,
     episodes: int,                         # total finished episodes to collect
     cfg: Optional[CheetahEmbodiment] = None,
+    reset_after_proxy: bool = False,
     video_dir: Optional[str] = None,
     seed: int = 0,
     num_envs: int = 8,
@@ -107,7 +108,7 @@ def eval_one_config_vector(
     proxy_training_steps: int = 128,
     proxy_amplitude: float = 0.10,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    envs = make_vector_eval_env(env_id, num_envs, seed, video_dir, cfg, proxy_period_steps, proxy_training_steps, proxy_amplitude)
+    envs = make_vector_eval_env(env_id, num_envs, seed, video_dir, cfg, proxy_period_steps, proxy_training_steps, proxy_amplitude, reset_after_proxy=reset_after_proxy)
     agent_device = next(agent.parameters()).device if isinstance(agent, torch.nn.Module) else torch.device(device)
 
     obs, _ = envs.reset(seed=seed)
@@ -209,6 +210,7 @@ def evaluate_on_fixed_scenarios(
     proxy_period_steps: int = 32,
     proxy_training_steps: int = 128,
     proxy_amplitude: float = 0.10,
+    reset_after_proxy: bool = False,
 ) -> List[dict]:
     rows = []
     for name, cfg in fixed_scenarios():
@@ -221,6 +223,7 @@ def evaluate_on_fixed_scenarios(
             proxy_period_steps=proxy_period_steps,
             proxy_training_steps=proxy_training_steps,
             proxy_amplitude=proxy_amplitude,
+            reset_after_proxy=reset_after_proxy,
         )
         row = {
             "scenario": name,

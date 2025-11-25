@@ -60,6 +60,8 @@ class Args:
     """Number of steps for one full sine wave period"""
     proxy_amplitude: float = 0.10 
     """Amplitude of the proxy sine wave relative to inital torso height"""
+    reset_after_proxy: bool = True
+    """Whether to reset the environment after the proxy task phase, this will also allow to continue if proxy task fails"""
 
     # Proxy task settings evaluation
     eval_proxy_training_steps: int = 256
@@ -180,7 +182,7 @@ if __name__ == "__main__":
 
     # env setup
     env_fns = [
-        cheetahEnv.make_env(args.env_id, i, args.capture_video, run_name, args.proxy_period_steps, args.proxy_training_steps, args.proxy_amplitude, args.randomize_morphology_every, args.morphology_jitter)
+        cheetahEnv.make_env(args.env_id, i, args.capture_video, run_name, args.proxy_period_steps, args.proxy_training_steps, args.proxy_amplitude, args.randomize_morphology_every, args.morphology_jitter, reset_after_proxy=args.reset_after_proxy)
         for i in range(args.num_envs)
     ]
 
@@ -526,6 +528,7 @@ if __name__ == "__main__":
                     proxy_period_steps=args.eval_proxy_period_steps,
                     proxy_training_steps=args.eval_proxy_training_steps,
                     proxy_amplitude=args.eval_proxy_amplitude,
+                    reset_after_proxy=args.reset_after_proxy,
                 )
 
                 # Summaries
@@ -592,7 +595,7 @@ if __name__ == "__main__":
 
         global_update_idx += 1
 
-    rows = evaluateCheetah.evaluate_on_fixed_scenarios(agent, args.env_id, device, 6, video_root=f"videos/{run_name}-eval", seed=args.seed+100)
+    rows = evaluateCheetah.evaluate_on_fixed_scenarios(agent, args.env_id, device, 6, video_root=f"videos/{run_name}-eval", seed=args.seed+100, reset_after_proxy=args.reset_after_proxy)
 
     # ---- Summaries over scenarios ----
     ret_means = np.array([r["return_mean"] for r in rows], dtype=np.float64)

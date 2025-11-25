@@ -34,6 +34,7 @@ class CheetahCustom(HalfCheetahEnv):
         change_every: int = 0,          # 0 => no domain randomization; >0 => randomize every N episodes
         morphology_jitter: float = 0.2, # +/- 20% scaling around 1.0 by default
         seed: Optional[int] = None,
+        reset_after_proxy: bool = False,
         **kwargs
     ):
         super().__init__(**kwargs)
@@ -41,7 +42,7 @@ class CheetahCustom(HalfCheetahEnv):
         self._body_mass0 = self.model.body_mass.copy()
         self._body_pos0 = self.model.body_pos.copy()
         self._body_inertia0 = self.model.body_inertia.copy()
-
+        self._reset_after_proxy = reset_after_proxy
         # cache common geom/body ids by name (standard HalfCheetah asset names)
         def _gid(nm): return mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, nm)
         def _bid(nm): return mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, nm)
@@ -429,21 +430,35 @@ class CheetahCustom(HalfCheetahEnv):
 
         # episode return logging
         if term or trunc:
-            info["proxy_return"] = self._proxy_return
-            info["real_return"] = self._real_return
+            if self._reset_after_proxy and float(self.data.time) <= self.proxy_learning_time:
+                # Simply reset the environment and do not terminate and skip to real task phase
+                info["proxy_return"] = self._proxy_return
+                info["real_return"] = 0.0
+
+                # Reset the state to the beginning of real task phase
+                obs, _ = super().reset()
+                self.data.time = self.proxy_learning_time + self.dt
+                term = False
+                trunc = False
+
+            else:
+                # self._proxy_return = 0.0
+                # self._real_return = 0.0
+                info["proxy_return"] = self._proxy_return
+                info["real_return"] = self._real_return
 
         return self._add_obs_and_pad(obs), rew, term, trunc, info
 
 
 # --- vector/eval helpers ---
-def make_env(env_id: str, idx: int, capture_video: bool, run_name: str, proxy_period_steps: int, proxy_training_steps: int, proxy_amplitude: float, change_every: int = 0, morphology_jitter: float = 0.2):
+def make_env(env_id: str, idx: int, capture_video: bool, run_name: str, proxy_period_steps: int, proxy_training_steps: int, proxy_amplitude: float, change_every: int = 0, morphology_jitter: float = 0.2, reset_after_proxy: bool = False):
     """
     Default env factory. `change_every=0` means no domain randomization.
     To enable domain randomization, pass change_every>0 from your training script.
     """
     def thunk():
         rm = "rgb_array" if (capture_video and idx == 0) else None
-        env = CheetahCustom(render_mode=rm, change_every=change_every, morphology_jitter=morphology_jitter, proxy_period_steps=proxy_period_steps, proxy_training_steps=proxy_training_steps, proxy_amplitude=proxy_amplitude)
+        env = CheetahCustom(render_mode=rm, change_every=change_every, morphology_jitter=morphology_jitter, proxy_period_steps=proxy_period_steps, proxy_training_steps=proxy_training_steps, proxy_amplitude=proxy_amplitude, reset_after_proxy=reset_after_proxy)
         env = gym.wrappers.RecordEpisodeStatistics(env)
         if capture_video and idx == 0:
             env = gym.wrappers.RecordVideo(
@@ -455,7 +470,7 @@ def make_env(env_id: str, idx: int, capture_video: bool, run_name: str, proxy_pe
     return thunk
 
 
-def make_evaluate_env(env_id: str, video_dir: str | None = None, seed: int = 0, proxy_period_steps: int = 32, proxy_training_steps: int = 128, proxy_amplitude: float = 0.10):
+def make_evaluate_env(env_id: str, video_dir: str | None = None, seed: int = 0, proxy_period_steps: int = 32, proxy_training_steps: int = 128, proxy_amplitude: float = 0.10, reset_after_proxy: bool = False):
     rm = "rgb_array" if video_dir else None
     env = gym.make(
         env_id,
@@ -463,6 +478,7 @@ def make_evaluate_env(env_id: str, video_dir: str | None = None, seed: int = 0, 
         proxy_period_steps=proxy_period_steps,
         proxy_training_steps=proxy_training_steps,
         proxy_amplitude=proxy_amplitude,
+        reset_after_proxy=reset_after_proxy,
     )
     env = gym.wrappers.RecordEpisodeStatistics(env)
     if video_dir:
