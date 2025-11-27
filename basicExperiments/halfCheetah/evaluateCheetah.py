@@ -109,7 +109,7 @@ def eval_one_config_vector(
     proxy_period_steps: int = 32,
     proxy_training_steps: int = 128,
     proxy_amplitude: float = 0.10,
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, list]:
     envs = make_vector_eval_env(env_id, num_envs, seed, video_dir, cfg, proxy_period_steps, proxy_training_steps, proxy_amplitude, reset_after_proxy=reset_after_proxy)
     agent_device = next(agent.parameters()).device if isinstance(agent, torch.nn.Module) else torch.device(device)
 
@@ -128,6 +128,11 @@ def eval_one_config_vector(
     done_R_real : List[float] = []
     done_L: List[int] = []
 
+    # per-env traces
+    height_traces = [[] for _ in range(num_envs)]  # list of list[float]
+    target_traces = [[] for _ in range(num_envs)]  # list of list[float]
+    all_traces: list = []  # list of dicts for all episodes
+
     while len(done_R) < episodes:
         x = torch.as_tensor(obs, dtype=torch.float32, device=agent_device)
         try:
@@ -141,6 +146,14 @@ def eval_one_config_vector(
         a = action.detach().cpu().numpy()
         obs, reward, term, trunc, info = envs.step(a)
         done = np.logical_or(term, trunc)
+
+        # record heights for each env at this step
+        if "torso_h" in info and "target_h" in info:
+            hs = np.asarray(info["torso_h"], dtype=np.float32)
+            ts = np.asarray(info["target_h"], dtype=np.float32)
+            for j in range(num_envs):
+                height_traces[j].append(float(hs[j]))
+                target_traces[j].append(float(ts[j]))
 
         ret += reward.astype(np.float32)
         if "current_proxy_reward" in info:
@@ -159,6 +172,19 @@ def eval_one_config_vector(
                 done_L.append(int(length[i]))
                 done_R_proxy.append(float(ret_proxy[i]))
                 done_R_real.append(float(ret_real[i]))
+
+                # store trace for this finished episode
+                all_traces.append({
+                    "env_idx": int(i),
+                    "episode_idx": len(done_R) - 1,
+                    "height": np.array(height_traces[i], dtype=np.float32),
+                    "target": np.array(target_traces[i], dtype=np.float32),
+                })
+
+                # reset per-env trace buffers so next episode starts fresh
+                height_traces[i] = []
+                target_traces[i] = []
+                
                 ret[i] = 0.0
                 ret_proxy[i] = 0.0
                 ret_real[i] = 0.0
@@ -168,8 +194,13 @@ def eval_one_config_vector(
             print(f"\r[eval] {len(done_R)}/{episodes} episodes, mean_return={np.mean(done_R):.1f}", end="")
 
     envs.close()
-    return np.array(done_R[:episodes], dtype=np.float32), np.array(done_L[:episodes], dtype=np.int32), np.array(done_R_proxy[:episodes], dtype=np.float32), np.array(done_R_real[:episodes], dtype=np.float32)
-
+    return (
+        np.array(done_R[:episodes], dtype=np.float32),
+        np.array(done_L[:episodes], dtype=np.int32),
+        np.array(done_R_proxy[:episodes], dtype=np.float32),
+        np.array(done_R_real[:episodes], dtype=np.float32),
+        all_traces,
+    )
 
 # -------------------------
 # Fixed embodiments (suite)
@@ -213,20 +244,28 @@ def evaluate_on_fixed_scenarios(
     proxy_training_steps: int = 128,
     proxy_amplitude: float = 0.10,
     reset_after_proxy: bool = False,
-) -> List[dict]:
+) -> Tuple[List[dict], list]:
     rows = []
+    height_logs: list = []   # NEW
+
     for name, cfg in fixed_scenarios():
         print("Evaluating scenario:", name)
         vdir = f"{video_root}/{name}/{eval_tag}" if video_root else None
-        rets, lens, rets_proxy, rets_real = eval_one_config_vector(
-            agent, env_id, device,
+        rets, lens, rets_proxy, rets_real, traces = eval_one_config_vector(
+            agent,
+            env_id,
+            device,
             episodes=episodes_per_scenario,
-            cfg=cfg, video_dir=vdir, seed=seed, num_envs=num_envs, 
+            cfg=cfg,
+            video_dir=vdir,
+            seed=seed,
+            num_envs=num_envs,
             proxy_period_steps=proxy_period_steps,
             proxy_training_steps=proxy_training_steps,
             proxy_amplitude=proxy_amplitude,
             reset_after_proxy=reset_after_proxy,
         )
+
         row = {
             "scenario": name,
             "return_mean": float(rets.mean()),
@@ -238,10 +277,15 @@ def evaluate_on_fixed_scenarios(
             "real_return_mean": float(rets_real.mean()),
             "real_return_std": float(rets_real.std(ddof=1) if len(rets_real) > 1 else 0.0),
         }
-        # store exact embodiment used (handy for CSV/W&B)
         row.update({k: (getattr(cfg, k) if getattr(cfg, k) is not None else None) for k in vars(cfg)})
         rows.append(row)
-    return rows
+
+        # attach scenario name to each trace and collect
+        for tr in traces:
+            tr["scenario"] = name
+        height_logs.extend(traces)
+
+    return rows, height_logs
 
 
 # -------------------------
@@ -287,10 +331,15 @@ def evaluate_on_random_configs(
     for i, cfg in enumerate(cfgs):
         name = f"rand_{i:03d}"
         vdir = f"{video_root}/{name}" if video_root else None
-        rets, lens, rets_proxy, rets_real = eval_one_config_vector(
-            agent, env_id, device,
+        rets, lens, rets_proxy, rets_real, _ = eval_one_config_vector(
+            agent,
+            env_id,
+            device,
             episodes=episodes_per_config,
-            cfg=cfg, video_dir=vdir, seed=seed + i + 1, num_envs=num_envs,
+            cfg=cfg,
+            video_dir=vdir,
+            seed=seed + i + 1,
+            num_envs=num_envs,
             proxy_period_steps=proxy_period_steps,
             proxy_training_steps=proxy_training_steps,
             proxy_amplitude=proxy_amplitude,

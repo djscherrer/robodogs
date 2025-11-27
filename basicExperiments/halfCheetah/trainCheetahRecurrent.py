@@ -20,7 +20,7 @@ from basicExperiments.halfCheetah import cheetahAgent, cheetahEnv, evaluateCheet
 
 @dataclass
 class Args:
-    exp_name: str = "Cheetah_Recurrent_Rand5_ProxyOnly_256s"
+    exp_name: str = "ProxyOnly_512s__128p__0.2a"
     """the name of this experiment"""
     seed: int = 2
     """seed of the experiment"""
@@ -54,14 +54,16 @@ class Args:
     """Whether to capture videos during evaluation"""
 
     # Proxy task settings training
-    proxy_training_steps: int = 256
+    proxy_training_steps: int = 512
     """Number of steps over which to train on proxy task before switching to main task"""
-    proxy_period_steps: int = 64
+    proxy_period_steps: int = 128
     """Number of steps for one full sine wave period"""
-    proxy_amplitude: float = 0.10 
+    proxy_amplitude: float = 0.20 
     """Amplitude of the proxy sine wave relative to inital torso height"""
     reset_after_proxy: bool = True
     """Whether to reset the environment after the proxy task phase, this will also allow to continue if proxy task fails"""
+    velocity_penalty_k: float = 0.1
+    """Coefficient for velocity penalty during proxy task"""
 
     # Proxy task settings evaluation
     eval_proxy_training_steps: int = 256
@@ -182,7 +184,7 @@ if __name__ == "__main__":
 
     # env setup
     env_fns = [
-        cheetahEnv.make_env(args.env_id, i, args.capture_video, run_name, args.proxy_period_steps, args.proxy_training_steps, args.proxy_amplitude, args.randomize_morphology_every, args.morphology_jitter, reset_after_proxy=args.reset_after_proxy)
+        cheetahEnv.make_env(args.env_id, i, args.capture_video, run_name, args.proxy_period_steps, args.proxy_training_steps, args.proxy_amplitude, args.velocity_penalty_k, args.randomize_morphology_every, args.morphology_jitter, reset_after_proxy=args.reset_after_proxy)
         for i in range(args.num_envs)
     ]
 
@@ -516,13 +518,13 @@ if __name__ == "__main__":
                 eval_tag = f"u{global_update_idx:05d}"
                 eval_video_root: Optional[str] = (f"videos/{run_name}-eval" if args.eval_capture_video else None)
 
-                rows = evaluateCheetah.evaluate_on_fixed_scenarios(
+                rows, height_logs = evaluateCheetah.evaluate_on_fixed_scenarios(
                     agent,
                     args.env_id,
                     device,
                     episodes_per_scenario=args.eval_episodes,
                     video_root=eval_video_root,
-                    seed=args.seed + 100 + global_update_idx,   # different seed per eval
+                    seed=args.seed + 100 + global_update_idx,
                     num_envs=args.eval_num_envs,
                     eval_tag=eval_tag,
                     proxy_period_steps=args.eval_proxy_period_steps,
@@ -552,6 +554,30 @@ if __name__ == "__main__":
                     f"std_ret={eval_summary['eval/return_std_over_scenarios']:.2f}"
                     f"mean_ret_proxy={eval_summary['eval/return_mean_over_scenarios_proxy']:.2f} "
                     f"mean_ret_real={eval_summary['eval/return_mean_over_scenarios_real']:.2f}")
+                
+                # --- Log height trajectories per episode & scenario ---
+                for tr in height_logs:
+                    scen = tr["scenario"]
+                    ep_idx = tr["episode_idx"]
+                    h = tr["height"]
+                    tgt = tr["target"]
+                    T = len(h)
+                    xs = list(range(T))
+                    ys = [h.tolist(), tgt.tolist()]
+                    keys = ["height", "target"]
+
+                    line_plot = wandb.plot.line_series(
+                        xs=xs,
+                        ys=ys,
+                        keys=keys,
+                        title=f"{scen} ep {ep_idx}",
+                        xname="t_step",
+                    )
+
+                    wandb.log({
+                        f"height_logging/{scen}": line_plot,
+                        "global_step": global_step,
+                    })
 
                 # Optional: treat eval mean as "best" gate too
                 if eval_summary["eval/return_mean_over_scenarios"] > best_return:
@@ -595,7 +621,23 @@ if __name__ == "__main__":
 
         global_update_idx += 1
 
-    rows = evaluateCheetah.evaluate_on_fixed_scenarios(agent, args.env_id, device, 6, video_root=f"videos/{run_name}-eval", seed=args.seed+100, reset_after_proxy=args.reset_after_proxy)
+    final_eval_tag = "final"
+    final_eval_video_root = f"videos/{run_name}-eval-final"
+
+    rows, height_logs = evaluateCheetah.evaluate_on_fixed_scenarios(
+        agent,
+        args.env_id,
+        device,
+        episodes_per_scenario=args.eval_episodes,
+        video_root=final_eval_video_root,
+        seed=args.seed + 100 + global_update_idx,
+        num_envs=args.eval_num_envs,
+        eval_tag=final_eval_tag,
+        proxy_period_steps=args.eval_proxy_period_steps,
+        proxy_training_steps=args.eval_proxy_training_steps,
+        proxy_amplitude=args.eval_proxy_amplitude,
+        reset_after_proxy=args.reset_after_proxy,
+    )
 
     # ---- Summaries over scenarios ----
     ret_means = np.array([r["return_mean"] for r in rows], dtype=np.float64)
