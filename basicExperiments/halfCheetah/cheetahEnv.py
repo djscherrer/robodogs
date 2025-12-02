@@ -408,6 +408,9 @@ class CheetahCustom(HalfCheetahEnv):
         info["upright"] = up
         info["torso_h"] = h
 
+        proxy_r = float(self.get_proxy_reward(h))
+        self._last_proxy_reward = proxy_r
+
         t = float(self.data.time)
         target_h = self._target_height(t)
         info["target_h"] = target_h
@@ -419,8 +422,7 @@ class CheetahCustom(HalfCheetahEnv):
         # If in training 
         if (t <= self.proxy_learning_time):
             # proxy task reward + upright bonus
-            proxy_r = float(self.get_proxy_reward(h))
-            self._last_proxy_reward = proxy_r
+            
 
             # base velocity in x
             vx = float(self.data.qvel[0])
