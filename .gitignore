@@ -225,7 +225,10 @@ __marimo__/
 wandb/
 
 # Videos
-videos/    
+videos/
+
+# Runs
+runs/
 
 # Checkpoints
 basicExperiments/cartPole/checkpoints/
