@@ -575,7 +575,7 @@ if __name__ == "__main__":
                     )
 
                     wandb.log({
-                        f"height_logging/{scen}": line_plot,
+                        f"height_logging/{scen}/ep_{ep_idx}": line_plot,
                         "global_step": global_step,
                     })
 

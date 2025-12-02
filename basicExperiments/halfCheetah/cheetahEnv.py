@@ -105,7 +105,7 @@ class CheetahCustom(HalfCheetahEnv):
 
         self._proxy_return = 0.0
         self._real_return = 0.0
-        self._last_proxy_reward = 0.0
+        self._last_reward = 0.0
         
 
     # ---------- utilities ----------
@@ -327,7 +327,7 @@ class CheetahCustom(HalfCheetahEnv):
         target_h = float(self.proxy_center + self.proxy_amp_morphology * np.sin(2.0 * np.pi * t / self.proxy_period_time))
 
         extras = np.array(
-            [flag, target_h, self._last_proxy_reward],
+            [flag, target_h, self._last_reward],
             dtype=np.float32,
         )
 
@@ -354,7 +354,7 @@ class CheetahCustom(HalfCheetahEnv):
     ):
         self._proxy_return = 0.0
         self._real_return = 0.0
-        self._last_proxy_reward = 0.0
+        self._last_reward = 0.0
         # keep vector-env seeding compatible
         if seed is not None:
             self.np_random, _ = seeding.np_random(seed)
@@ -408,9 +408,6 @@ class CheetahCustom(HalfCheetahEnv):
         info["upright"] = up
         info["torso_h"] = h
 
-        proxy_r = float(self.get_proxy_reward(h))
-        self._last_proxy_reward = proxy_r
-
         t = float(self.data.time)
         target_h = self._target_height(t)
         info["target_h"] = target_h
@@ -421,8 +418,8 @@ class CheetahCustom(HalfCheetahEnv):
 
         # If in training 
         if (t <= self.proxy_learning_time):
-            # proxy task reward + upright bonus
-            
+            # proxy task reward
+            proxy_r = float(self.get_proxy_reward(h))
 
             # base velocity in x
             vx = float(self.data.qvel[0])
@@ -438,6 +435,7 @@ class CheetahCustom(HalfCheetahEnv):
             self._real_return += rew
             info["current_real_reward"] = rew
 
+        self._last_reward = rew
         # early termination when clearly on back / collapsed
         fell = (up < self.min_upright) or (h < self.min_torso_h)
         if self.terminate_on_back and fell:
