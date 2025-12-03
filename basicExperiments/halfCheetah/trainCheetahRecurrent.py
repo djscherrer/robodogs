@@ -62,8 +62,6 @@ class Args:
     """Amplitude of the proxy sine wave relative to inital torso height"""
     reset_after_proxy: bool = True
     """Whether to reset the environment after the proxy task phase, this will also allow to continue if proxy task fails"""
-    velocity_penalty_k: float = 0.1
-    """Coefficient for velocity penalty during proxy task"""
 
     # Proxy task settings evaluation
     eval_proxy_training_steps: int = 256
@@ -184,7 +182,7 @@ if __name__ == "__main__":
 
     # env setup
     env_fns = [
-        cheetahEnv.make_env(args.env_id, i, args.capture_video, run_name, args.proxy_period_steps, args.proxy_training_steps, args.proxy_amplitude, args.velocity_penalty_k, args.randomize_morphology_every, args.morphology_jitter, reset_after_proxy=args.reset_after_proxy)
+        cheetahEnv.make_env(args.env_id, i, args.capture_video, run_name, args.proxy_period_steps, args.proxy_training_steps, args.proxy_amplitude, args.randomize_morphology_every, args.morphology_jitter, reset_after_proxy=args.reset_after_proxy)
         for i in range(args.num_envs)
     ]
 

@@ -30,12 +30,14 @@ class CheetahCustom(HalfCheetahEnv):
         proxy_period_steps: int = 32,
         proxy_training_steps: int = 128,  # duration over which proxy is learned
         proxy_amplitude: float = 0.10,
+
+        proxy_track_weight: float = 1.0,
+        proxy_vel_penalty_weight: float = 0.2,
         # ---- Domain randomization controls ----
         change_every: int = 0,          # 0 => no domain randomization; >0 => randomize every N episodes
         morphology_jitter: float = 0.2, # +/- 20% scaling around 1.0 by default
         seed: Optional[int] = None,
         reset_after_proxy: bool = False,
-        velocity_penalty_k: float = 0.1,
         **kwargs
     ):
         super().__init__(**kwargs)
@@ -45,7 +47,6 @@ class CheetahCustom(HalfCheetahEnv):
         self._body_inertia0 = self.model.body_inertia.copy()
 
         self._reset_after_proxy = reset_after_proxy
-        self.velocity_penalty_k = float(velocity_penalty_k)
         # cache common geom/body ids by name (standard HalfCheetah asset names)
         def _gid(nm): return mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, nm)
         def _bid(nm): return mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, nm)
@@ -74,7 +75,12 @@ class CheetahCustom(HalfCheetahEnv):
             orig_dim = int(orig_shape[0])
 
         base_dim = orig_dim + 3
-        self.observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(base_dim or obs_pad,), dtype=np.float32)
+        dim = obs_pad if obs_pad is not None else base_dim
+        self.observation_space = gym.spaces.Box(
+            low=-np.inf, high=np.inf,
+            shape=(dim,),
+            dtype=np.float32,
+        )
         # ---- morphology / shaping settings ----
         self._morphology: Dict[str, float] = {}  # name->scale
         self.terminate_on_back = bool(terminate_on_back)
@@ -102,6 +108,8 @@ class CheetahCustom(HalfCheetahEnv):
         self.proxy_amp_relative = float(proxy_amplitude)
         self.proxy_amp_morphology = None  # to be set on reset
         self.proxy_center = None
+        self.proxy_track_weight = float(proxy_track_weight)
+        self.proxy_vel_penalty_weight = float(proxy_vel_penalty_weight)
 
         self._proxy_return = 0.0
         self._real_return = 0.0
@@ -398,10 +406,11 @@ class CheetahCustom(HalfCheetahEnv):
 
         # Quadratic penalty
         err = torso_h - target_h
-        return - 100 * float(err * err)
+        proxy_sensitivity = 0.02
+        return np.exp(-float(err * err)/proxy_sensitivity)
     
     def step(self, action: np.ndarray):
-        obs, rew, term, trunc, info = super().step(action)
+        obs, forward_rew, term, trunc, info = super().step(action)
 
         # diagnostics
         up, h = self._upright_and_height()
@@ -419,19 +428,24 @@ class CheetahCustom(HalfCheetahEnv):
         # If in training 
         if (t <= self.proxy_learning_time):
             # proxy task reward
-            proxy_r = float(self.get_proxy_reward(h))
+            proxy_score = float(self.get_proxy_reward(h))
 
             # base velocity in x
             vx = float(self.data.qvel[0])
-            info["vx"] = vx
-            vel_penalty = self.velocity_penalty_k * (vx * vx)
+            info["vx"] = vx # usually between +- (0, 1.5)
+            vel_penalty = vx * vx
+            vel_sensitivity = 0.6 
+            vel_penalty_score = np.exp(-vel_penalty/vel_sensitivity)
 
-            rew = float(proxy_r - vel_penalty)
+            alive_bonus = 0 # TODO: do we need this actually, bc now scores are positive?
+            rew = self.proxy_track_weight * proxy_score - self.proxy_vel_penalty_weight * vel_penalty_score + alive_bonus
             self._proxy_return += rew
             info["current_proxy_reward"] = rew
+            info["proxy_track"] = proxy_score
+            info["proxy_vel_penalty"] = -vel_penalty_score
         else:
             # default forward reward + upright bonus
-            rew = float(rew + self.upright_bonus_k * upright_piece)
+            rew = float(forward_rew + self.upright_bonus_k * upright_piece)
             self._real_return += rew
             info["current_real_reward"] = rew
 
@@ -469,14 +483,14 @@ class CheetahCustom(HalfCheetahEnv):
 
 
 # --- vector/eval helpers ---
-def make_env(env_id: str, idx: int, capture_video: bool, run_name: str, proxy_period_steps: int, proxy_training_steps: int, proxy_amplitude: float, velocity_penalty_k: float, change_every: int = 0, morphology_jitter: float = 0.2, reset_after_proxy: bool = False):
+def make_env(env_id: str, idx: int, capture_video: bool, run_name: str, proxy_period_steps: int, proxy_training_steps: int, proxy_amplitude: float, change_every: int = 0, morphology_jitter: float = 0.2, reset_after_proxy: bool = False):
     """
     Default env factory. `change_every=0` means no domain randomization.
     To enable domain randomization, pass change_every>0 from your training script.
     """
     def thunk():
         rm = "rgb_array" if (capture_video and idx == 0) else None
-        env = CheetahCustom(render_mode=rm, change_every=change_every, morphology_jitter=morphology_jitter, proxy_period_steps=proxy_period_steps, proxy_training_steps=proxy_training_steps, proxy_amplitude=proxy_amplitude, velocity_penalty_k=velocity_penalty_k, reset_after_proxy=reset_after_proxy)
+        env = CheetahCustom(render_mode=rm, change_every=change_every, morphology_jitter=morphology_jitter, proxy_period_steps=proxy_period_steps, proxy_training_steps=proxy_training_steps, proxy_amplitude=proxy_amplitude, reset_after_proxy=reset_after_proxy)
         env = gym.wrappers.RecordEpisodeStatistics(env)
         if capture_video and idx == 0:
             env = gym.wrappers.RecordVideo(
