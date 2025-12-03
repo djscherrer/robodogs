@@ -377,6 +377,7 @@ if __name__ == "__main__":
                 save_last()
 
                 if args.save_every_episodes and (episodes_done % args.save_every_episodes == 0):
+                    print(f"[save_every_episodes {args.save_every_episodes} episodes {episodes_done}] Saving periodic checkpoint...")
                     save_checkpoint(episodes_done)
 
                 if ep_r > best_return:
