@@ -332,7 +332,7 @@ class CheetahCustom(HalfCheetahEnv):
         flag = 0.0 if t <= self.proxy_learning_time else 1.0
 
         # Target height for current time
-        target_h = float(self.proxy_center + self.proxy_amp_morphology * np.sin(2.0 * np.pi * t / self.proxy_period_time))
+        target_h = self._target_height(t)
 
         extras = np.array(
             [flag, target_h, self._last_reward],
@@ -390,10 +390,11 @@ class CheetahCustom(HalfCheetahEnv):
         if t is None:
             t = float(self.data.time)
         return float(
-            self.proxy_center
-            + self.proxy_amp_morphology * np.sin(2.0 * np.pi * t / self.proxy_period_time)
+            (self.proxy_center * 0.8)
+            + self.proxy_amp_morphology * np.sin(2.0 * np.pi * t / self.proxy_period_time) 
         )
-    
+    # NOTE: factor 0.75 comes from observation, that the HalfCheetah torso hovers around 75% of its COM height
+
     def get_proxy_reward(self, torso_h: float) -> float:
         """
         Sinusoidal tracking reward on torso height.
@@ -483,14 +484,24 @@ class CheetahCustom(HalfCheetahEnv):
 
 
 # --- vector/eval helpers ---
-def make_env(env_id: str, idx: int, capture_video: bool, run_name: str, proxy_period_steps: int, proxy_training_steps: int, proxy_amplitude: float, change_every: int = 0, morphology_jitter: float = 0.2, reset_after_proxy: bool = False):
+def make_env(env_id: str, idx: int, capture_video: bool, run_name: str, proxy_period_steps: int, proxy_training_steps: int, proxy_amplitude: float, change_every: int = 0, morphology_jitter: float = 0.2, proxy_track_weight: float = 1.0, proxy_vel_penalty_weight: float = 0.2, reset_after_proxy: bool = False):
     """
     Default env factory. `change_every=0` means no domain randomization.
     To enable domain randomization, pass change_every>0 from your training script.
     """
     def thunk():
         rm = "rgb_array" if (capture_video and idx == 0) else None
-        env = CheetahCustom(render_mode=rm, change_every=change_every, morphology_jitter=morphology_jitter, proxy_period_steps=proxy_period_steps, proxy_training_steps=proxy_training_steps, proxy_amplitude=proxy_amplitude, reset_after_proxy=reset_after_proxy)
+        env = CheetahCustom(
+            render_mode=rm, 
+            change_every=change_every, 
+            morphology_jitter=morphology_jitter, 
+            proxy_period_steps=proxy_period_steps, 
+            proxy_training_steps=proxy_training_steps, 
+            proxy_amplitude=proxy_amplitude, 
+            reset_after_proxy=reset_after_proxy,
+            proxy_track_weight=proxy_track_weight,
+            proxy_vel_penalty_weight=proxy_vel_penalty_weight
+            )
         env = gym.wrappers.RecordEpisodeStatistics(env)
         if capture_video and idx == 0:
             env = gym.wrappers.RecordVideo(
