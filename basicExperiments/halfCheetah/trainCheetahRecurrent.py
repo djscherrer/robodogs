@@ -20,7 +20,7 @@ from basicExperiments.halfCheetah import cheetahAgent, cheetahEnv, evaluateCheet
 
 @dataclass
 class Args:
-    exp_name: str = "ProxyOnly_512s__128p__0.2a"
+    exp_name: str = "Training_512s__128p__0.2a"
     """the name of this experiment"""
     seed: int = 2
     """seed of the experiment"""
@@ -264,6 +264,11 @@ if __name__ == "__main__":
             },
         }
 
+    def save_checkpoint(episodes_done: int):
+        path = os.path.join(ckpt_dir, f"ep{episodes_done:06d}.pt")
+        torch.save(_checkpoint_payload(), path)
+        print(f"[save_checkpoint] saved checkpoint to: {path}")
+
     def save_last():
         torch.save(_checkpoint_payload(), os.path.join(ckpt_dir, "last.pt"))
 
@@ -376,7 +381,8 @@ if __name__ == "__main__":
                 save_last()
 
                 if args.save_every_episodes and (episodes_done % args.save_every_episodes == 0):
-                    save_last()
+                    print(f"[save_every_episodes {args.save_every_episodes} episodes {episodes_done}] Saving periodic checkpoint...")
+                    save_checkpoint(episodes_done)
 
                 if ep_r > best_return:
                     best_return = ep_r
@@ -624,7 +630,8 @@ if __name__ == "__main__":
         global_update_idx += 1
 
     final_eval_tag = "final"
-    final_eval_video_root = f"videos/{run_name}-eval-final"
+    final_eval_video_root = f"videos/{run_name}-eval-final" if args.eval_capture_video else None
+    print("\n=== Running final evaluation ===")
 
     rows, height_logs = evaluateCheetah.evaluate_on_fixed_scenarios(
         agent,
