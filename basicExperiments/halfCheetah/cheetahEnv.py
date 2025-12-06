@@ -439,7 +439,7 @@ class CheetahCustom(HalfCheetahEnv):
             vel_penalty_score = np.exp(-vel_penalty/vel_sensitivity)
 
             alive_bonus = 0 # TODO: do we need this actually, bc now scores are positive?
-            rew = self.proxy_track_weight * proxy_score - self.proxy_vel_penalty_weight * vel_penalty_score + alive_bonus
+            rew = self.proxy_track_weight * proxy_score + self.proxy_vel_penalty_weight * vel_penalty_score + alive_bonus
             self._proxy_return += rew
             info["current_proxy_reward"] = rew
             info["proxy_track"] = proxy_score

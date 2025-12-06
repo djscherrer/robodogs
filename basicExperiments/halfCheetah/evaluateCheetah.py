@@ -1,10 +1,15 @@
 # evaluate_jita.py
+import csv
 from dataclasses import dataclass
+import os
 from typing import Optional, Dict, Tuple, List
 import numpy as np
 import torch
 import gymnasium as gym
-from . import cheetahEnv  # expects CheetahCustom + make_evaluate_env
+from basicExperiments.halfCheetah import cheetahEnv  # expects CheetahCustom + make_evaluate_env
+from gymnasium.envs.registration import register
+
+from basicExperiments.halfCheetah.cheetahAgent import GRUAgent
 
 
 # -------------------------
@@ -96,7 +101,7 @@ def make_vector_eval_env(
 # -------------------------
 @torch.no_grad()
 def eval_one_config_vector(
-    agent,
+    agent: GRUAgent | torch.nn.Module,
     env_id: str,
     device: torch.device | str,
     episodes: int,                         # total finished episodes to collect
@@ -114,7 +119,6 @@ def eval_one_config_vector(
     agent_device = next(agent.parameters()).device if isinstance(agent, torch.nn.Module) else torch.device(device)
 
     obs, _ = envs.reset(seed=seed)
-
     # recurrent-safe
     h_a = h_c = None
     hidden = getattr(agent, "hidden_size", 128)
@@ -364,28 +368,42 @@ if __name__ == "__main__":
     from basicExperiments.halfCheetah.cheetahAgent import load_agent_from_checkpoint
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--env-id", type=str, required=True)
-    parser.add_argument("--ckpt", type=str, required=True)
+    parser.add_argument("--env-id", type=str, default="Cheetah_Recurrent")
+    parser.add_argument("--ckpt", type=str, default="/Users/constantinpinkl/Downloads/proxy_only_same_period_best.pt")
     parser.add_argument("--device", type=str, default="cpu")
     parser.add_argument("--episodes-per-scenario", type=int, default=8)
-    parser.add_argument("--video-root", type=str, default=None)
+    parser.add_argument("--video-root", type=str, default="/Users/constantinpinkl/Downloads/proxyOnlyVideo")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--n-random", type=int, default=10)
     args = parser.parse_args()
 
     device = torch.device(args.device)
     agent = load_agent_from_checkpoint(args.ckpt, device)
+    register(
+        id=args.env_id,
+        entry_point=cheetahEnv.CheetahCustom,
+        max_episode_steps=500,
+    )
 
     print("Evaluating on fixed scenarios...")
     fixed_rows = evaluate_on_fixed_scenarios(
         agent, args.env_id, device,
         episodes_per_scenario=args.episodes_per_scenario,
         video_root=args.video_root,
+        proxy_period_steps=128,
+        proxy_training_steps=0,
         seed=args.seed,
         eval_tag="manual_eval"
     )
-    for r in fixed_rows:
-        print(r)
+    # for r in fixed_rows:
+    #     print(r)
+
+    # write to file in video_dir
+    if args.video_root is not None:
+        with open(os.path.join(args.video_root, "eval_summary.csv"), "w") as f:
+            # just write fixed rows for now as text not csv
+            for r in fixed_rows:
+                f.write(str(r) + "\n")
 
     print("\nEvaluating on random scenarios...")
     rand_rows = evaluate_on_random_configs(
@@ -395,5 +413,5 @@ if __name__ == "__main__":
         video_root=args.video_root,
         seed=args.seed + 1000,
     )
-    for r in rand_rows:
-        print(r)
+    # for r in rand_rows:
+    #     print(r)

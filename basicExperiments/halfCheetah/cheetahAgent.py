@@ -154,7 +154,7 @@ def load_agent_from_checkpoint(
     *,
     force_agent_type: str | None = None,   # "mlp"/"gru" to override
 ) -> torch.nn.Module:
-    ckpt = torch.load(ckpt_path, map_location=device)
+    ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
     if "state_dict" not in ckpt or "meta" not in ckpt:
         raise ValueError("Checkpoint must contain 'state_dict' and 'meta'. Update the training saver.")
 
@@ -166,7 +166,7 @@ def load_agent_from_checkpoint(
     hidden = meta.get("gru_hidden_size", 128)
 
     if agent_type == "gru":
-        agent = GRUAgent(obs_shape=obs_shape, act_shape=act_shape, hidden_size=hidden)
+        agent = GRUAgent(obs_shape=obs_shape, act_shape=act_shape, hidden_size=hidden, mlp_hidden_size=256)
     elif agent_type == "mlp":
         agent = Agent(obs_shape=obs_shape, act_shape=act_shape)
     else:
