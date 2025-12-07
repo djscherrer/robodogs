@@ -31,6 +31,8 @@ class CheetahCustom(HalfCheetahEnv):
         proxy_training_steps: int = 128,  # duration over which proxy is learned
         proxy_amplitude: float = 0.10,
 
+        max_proxy_x_deviation: float = 0.5, # Maximum allowed x-distance from origin
+
         proxy_track_weight: float = 1.0,
         proxy_vel_penalty_weight: float = 0.2,
         # ---- Domain randomization controls ----
@@ -106,6 +108,7 @@ class CheetahCustom(HalfCheetahEnv):
         self.proxy_period_time = proxy_period_steps * self.dt    
         self.proxy_learning_time = proxy_training_steps * self.dt
         self.proxy_amp_relative = float(proxy_amplitude)
+        self.max_proxy_x_deviation = float(max_proxy_x_deviation)
         self.proxy_amp_morphology = None  # to be set on reset
         self.proxy_center = None
         self.proxy_track_weight = float(proxy_track_weight)
@@ -429,21 +432,32 @@ class CheetahCustom(HalfCheetahEnv):
         # If in training 
         if (t <= self.proxy_learning_time):
             # proxy task reward
+
+            # --- NEW PROXY X-POSITION CHECK ---
+            x_pos = float(self.data.xpos[self._torso_bid][0])
+            info["torso_x_pos"] = x_pos
+
+            if abs(x_pos) > self.max_proxy_x_deviation:
+                term = True
+                info["terminated_x_deviation"] = True
+                rew = -1.0 # Optional: Add a harsh penalty for failing the constraint
+            else:
+                info["terminated_x_deviation"] = False
             proxy_score = float(self.get_proxy_reward(h))
+            if not term:
+                # base velocity in x
+                vx = float(self.data.qvel[0])
+                info["vx"] = vx # usually between +- (0, 1.5)
+                vel_penalty = vx * vx
+                vel_sensitivity = 0.6 
+                vel_penalty_score = np.exp(-vel_penalty/vel_sensitivity)
 
-            # base velocity in x
-            vx = float(self.data.qvel[0])
-            info["vx"] = vx # usually between +- (0, 1.5)
-            vel_penalty = vx * vx
-            vel_sensitivity = 0.6 
-            vel_penalty_score = np.exp(-vel_penalty/vel_sensitivity)
-
-            alive_bonus = 0 # TODO: do we need this actually, bc now scores are positive?
-            rew = self.proxy_track_weight * proxy_score + self.proxy_vel_penalty_weight * vel_penalty_score + alive_bonus
-            self._proxy_return += rew
-            info["current_proxy_reward"] = rew
-            info["proxy_track"] = proxy_score
-            info["proxy_vel_penalty"] = -vel_penalty_score
+                alive_bonus = 0 # TODO: do we need this actually, bc now scores are positive?
+                rew = self.proxy_track_weight * proxy_score + self.proxy_vel_penalty_weight * vel_penalty_score + alive_bonus
+                self._proxy_return += rew
+                info["current_proxy_reward"] = rew
+                info["proxy_track"] = proxy_score
+                info["proxy_vel_penalty"] = -vel_penalty_score
         else:
             # default forward reward + upright bonus
             rew = float(forward_rew + self.upright_bonus_k * upright_piece)

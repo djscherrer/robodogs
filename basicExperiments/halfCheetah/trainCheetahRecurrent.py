@@ -56,7 +56,7 @@ class Args:
     # Proxy task settings training
     proxy_training_steps: int = 512
     """Number of steps over which to train on proxy task before switching to main task"""
-    proxy_period_steps: int = 128
+    proxy_period_steps: int = 256
     """Number of steps for one full sine wave period"""
     proxy_amplitude: float = 0.20 
     """Amplitude of the proxy sine wave relative to inital torso height"""
@@ -64,15 +64,15 @@ class Args:
     """Weight of the proxy tracking reward"""
     proxy_vel_penalty_weight: float = 0.2
     """Weight of the proxy velocity penalty"""
-    reset_after_proxy: bool = True
+    reset_after_proxy: bool = False
     """Whether to reset the environment after the proxy task phase, this will also allow to continue if proxy task fails"""
 
     # Proxy task settings evaluation
-    eval_proxy_training_steps: int = 256
+    eval_proxy_training_steps: int = 512
     """Number of steps over which to train on proxy task before switching to main task during evaluation"""
-    eval_proxy_period_steps: int = 64
+    eval_proxy_period_steps: int = 256
     """Number of steps for one full sine wave period during evaluation"""
-    eval_proxy_amplitude: float = 0.10
+    eval_proxy_amplitude: float = 0.2
     """Amplitude of the proxy sine wave during evaluation"""
 
     # Algorithm specific arguments
