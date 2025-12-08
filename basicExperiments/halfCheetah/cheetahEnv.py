@@ -27,7 +27,7 @@ class CheetahCustom(HalfCheetahEnv):
         upright_bonus_k: float = 0.30,  # smoothing weight added to default reward
         upright_bonus_margin: float = 0.0,
         # ---- Proxy task settings ----
-        proxy_period_steps: int = 32,
+        proxy_steps_per_period: int = 32,
         proxy_training_steps: int = 128,  # duration over which proxy is learned
         proxy_amplitude: float = 0.10,
 
@@ -105,7 +105,7 @@ class CheetahCustom(HalfCheetahEnv):
         self.np_random, _ = seeding.np_random(seed)
 
         # ---- Proxy task reward ----
-        self.proxy_period_time = proxy_period_steps * self.dt    
+        self.proxy_period_time = proxy_steps_per_period * self.dt    
         self.proxy_learning_time = proxy_training_steps * self.dt
         self.proxy_amp_relative = float(proxy_amplitude)
         self.max_proxy_x_deviation = float(max_proxy_x_deviation)
@@ -443,7 +443,9 @@ class CheetahCustom(HalfCheetahEnv):
                 rew = -1.0 # Optional: Add a harsh penalty for failing the constraint
             else:
                 info["terminated_x_deviation"] = False
+
             proxy_score = float(self.get_proxy_reward(h))
+
             if not term:
                 # base velocity in x
                 vx = float(self.data.qvel[0])
@@ -498,7 +500,7 @@ class CheetahCustom(HalfCheetahEnv):
 
 
 # --- vector/eval helpers ---
-def make_env(env_id: str, idx: int, capture_video: bool, run_name: str, proxy_period_steps: int, proxy_training_steps: int, proxy_amplitude: float, change_every: int = 0, morphology_jitter: float = 0.2, proxy_track_weight: float = 1.0, proxy_vel_penalty_weight: float = 0.2, reset_after_proxy: bool = False):
+def make_env(env_id: str, idx: int, capture_video: bool, run_name: str, proxy_steps_per_period: int, proxy_training_steps: int, proxy_amplitude: float, change_every: int = 0, morphology_jitter: float = 0.2, proxy_track_weight: float = 1.0, proxy_vel_penalty_weight: float = 0.2, reset_after_proxy: bool = False):
     """
     Default env factory. `change_every=0` means no domain randomization.
     To enable domain randomization, pass change_every>0 from your training script.
@@ -509,7 +511,7 @@ def make_env(env_id: str, idx: int, capture_video: bool, run_name: str, proxy_pe
             render_mode=rm, 
             change_every=change_every, 
             morphology_jitter=morphology_jitter, 
-            proxy_period_steps=proxy_period_steps, 
+            proxy_steps_per_period=proxy_steps_per_period, 
             proxy_training_steps=proxy_training_steps, 
             proxy_amplitude=proxy_amplitude, 
             reset_after_proxy=reset_after_proxy,
@@ -527,12 +529,12 @@ def make_env(env_id: str, idx: int, capture_video: bool, run_name: str, proxy_pe
     return thunk
 
 
-def make_evaluate_env(env_id: str, video_dir: str | None = None, seed: int = 0, proxy_period_steps: int = 32, proxy_training_steps: int = 128, proxy_amplitude: float = 0.10, reset_after_proxy: bool = False):
+def make_evaluate_env(env_id: str, video_dir: str | None = None, seed: int = 0, proxy_steps_per_period: int = 32, proxy_training_steps: int = 128, proxy_amplitude: float = 0.10, reset_after_proxy: bool = False):
     rm = "rgb_array" if video_dir else None
     env = gym.make(
         env_id,
         render_mode=rm,
-        proxy_period_steps=proxy_period_steps,
+        proxy_steps_per_period=proxy_steps_per_period,
         proxy_training_steps=proxy_training_steps,
         proxy_amplitude=proxy_amplitude,
         reset_after_proxy=reset_after_proxy,

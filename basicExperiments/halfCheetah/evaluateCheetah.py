@@ -73,7 +73,7 @@ def make_vector_eval_env(
     seed: int,
     video_dir: Optional[str] = None,
     cfg: Optional[CheetahEmbodiment] = None,
-    proxy_period_steps: int = 32,
+    proxy_steps_per_period: int = 32,
     proxy_training_steps: int = 128,
     proxy_amplitude: float = 0.10,
     reset_after_proxy: bool = False,
@@ -84,7 +84,7 @@ def make_vector_eval_env(
                 env_id,
                 video_dir=(f"{video_dir}/env{i}" if (video_dir is not None and i==0)else None), # NOTE: Only capture video on env0
                 seed=seed + i,
-                proxy_period_steps=proxy_period_steps,
+                proxy_steps_per_period=proxy_steps_per_period,
                 proxy_training_steps=proxy_training_steps,
                 proxy_amplitude=proxy_amplitude,
                 reset_after_proxy=reset_after_proxy,
@@ -111,11 +111,11 @@ def eval_one_config_vector(
     seed: int = 0,
     num_envs: int = 8,
     verbose: bool = False,
-    proxy_period_steps: int = 32,
+    proxy_steps_per_period: int = 32,
     proxy_training_steps: int = 128,
     proxy_amplitude: float = 0.10,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, list]:
-    envs = make_vector_eval_env(env_id, num_envs, seed, video_dir, cfg, proxy_period_steps, proxy_training_steps, proxy_amplitude, reset_after_proxy=reset_after_proxy)
+    envs = make_vector_eval_env(env_id, num_envs, seed, video_dir, cfg, proxy_steps_per_period, proxy_training_steps, proxy_amplitude, reset_after_proxy=reset_after_proxy)
     agent_device = next(agent.parameters()).device if isinstance(agent, torch.nn.Module) else torch.device(device)
 
     obs, _ = envs.reset(seed=seed)
@@ -244,7 +244,7 @@ def evaluate_on_fixed_scenarios(
     eval_tag: Optional[str] = None,
     isTargetTask: bool = True,
     # proxy task params
-    proxy_period_steps: int = 32,
+    proxy_steps_per_period: int = 32,
     proxy_training_steps: int = 128,
     proxy_amplitude: float = 0.10,
     reset_after_proxy: bool = False,
@@ -264,7 +264,7 @@ def evaluate_on_fixed_scenarios(
             video_dir=vdir,
             seed=seed,
             num_envs=num_envs,
-            proxy_period_steps=proxy_period_steps,
+            proxy_steps_per_period=proxy_steps_per_period,
             proxy_training_steps=proxy_training_steps,
             proxy_amplitude=proxy_amplitude,
             reset_after_proxy=reset_after_proxy,
@@ -326,7 +326,7 @@ def evaluate_on_random_configs(
     seed: int = 0,
     num_envs: int = 8,
     # proxy task params
-    proxy_period_steps: int = 32,
+    proxy_steps_per_period: int = 32,
     proxy_training_steps: int = 128,
     proxy_amplitude: float = 0.10,
 ) -> List[dict]:
@@ -344,7 +344,7 @@ def evaluate_on_random_configs(
             video_dir=vdir,
             seed=seed + i + 1,
             num_envs=num_envs,
-            proxy_period_steps=proxy_period_steps,
+            proxy_steps_per_period=proxy_steps_per_period,
             proxy_training_steps=proxy_training_steps,
             proxy_amplitude=proxy_amplitude,
         )
@@ -390,7 +390,7 @@ if __name__ == "__main__":
         agent, args.env_id, device,
         episodes_per_scenario=args.episodes_per_scenario,
         video_root=args.video_root,
-        proxy_period_steps=128,
+        proxy_steps_per_period=128,
         proxy_training_steps=0,
         seed=args.seed,
         eval_tag="manual_eval"
