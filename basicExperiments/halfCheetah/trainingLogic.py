@@ -384,7 +384,7 @@ def train_gru(args, envs, device, run_name) -> Tuple[torch.nn.Module, int, int]:
                     proxy_steps_per_period=args.eval_proxy_steps_per_period,
                     proxy_training_steps=args.eval_proxy_training_steps,
                     proxy_amplitude=args.eval_proxy_amplitude,
-                    reset_after_proxy=args.reset_after_proxy,
+                    reset_after_proxy=args.eval_reset_after_proxy,
                 )
 
                 # aggregate eval stats

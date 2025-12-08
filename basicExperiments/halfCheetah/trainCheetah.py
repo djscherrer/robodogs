@@ -56,7 +56,7 @@ class Args:
     """Whether to capture videos during evaluation"""
 
     # Proxy Episode Switch
-    proxy_only_timesteps: int = 5_000_000
+    proxy_only_timesteps: int = 0
     """Train only on proxy reward until this many env steps are collected; afterwards, pure main-task training."""
     
     # Proxy task settings training
@@ -80,7 +80,8 @@ class Args:
     """Number of steps for one full sine wave period during evaluation"""
     eval_proxy_amplitude: float = 0.2
     """Amplitude of the proxy sine wave during evaluation"""
-
+    eval_reset_after_proxy: bool = True
+    """Whether to reset the environment after the proxy task phase during evaluation"""
     # Algorithm specific arguments
     env_id: str = "Cheetah"
     """the id of the environment"""
@@ -269,7 +270,7 @@ if __name__ == "__main__":
         proxy_steps_per_period=args.eval_proxy_steps_per_period,
         proxy_training_steps=args.eval_proxy_training_steps,
         proxy_amplitude=args.eval_proxy_amplitude,
-        reset_after_proxy=args.reset_after_proxy,
+        reset_after_proxy=args.eval_reset_after_proxy,
     )
 
     # ---- Summaries over scenarios ----
