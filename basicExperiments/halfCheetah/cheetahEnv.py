@@ -35,6 +35,13 @@ class CheetahCustom(HalfCheetahEnv):
 
         proxy_track_weight: float = 1.0,
         proxy_vel_penalty_weight: float = 0.2,
+
+        # ---- MAIN task shaping settings ----
+        main_forward_sensitivity: float = 2.0,
+        main_upright_sensitivity: float = 1.0,
+        main_forward_weight: float = 1.0,
+        main_upright_weight: float = 0.2,
+
         # ---- Domain randomization controls ----
         change_every: int = 0,          # 0 => no domain randomization; >0 => randomize every N episodes
         morphology_jitter: float = 0.2, # +/- 20% scaling around 1.0 by default
@@ -114,9 +121,17 @@ class CheetahCustom(HalfCheetahEnv):
         self.proxy_track_weight = float(proxy_track_weight)
         self.proxy_vel_penalty_weight = float(proxy_vel_penalty_weight)
 
+        # ---- MAIN task shaping ----
+        self.main_forward_sensitivity = float(main_forward_sensitivity)
+        self.main_upright_sensitivity = float(main_upright_sensitivity)
+        self.main_forward_weight = float(main_forward_weight)
+        self.main_upright_weight = float(main_upright_weight)
+
         self._proxy_return = 0.0
         self._real_return = 0.0
         self._last_reward = 0.0
+
+        self._task_phase: str = "auto"
         
 
     # ---------- utilities ----------
@@ -127,6 +142,18 @@ class CheetahCustom(HalfCheetahEnv):
         upright = float(np.clip(self._world_up.dot(torso_up_world), -1.0, 1.0))
         torso_h = float(self.data.xpos[self._torso_bid][2])  # torso COM height
         return upright, torso_h
+    
+    # ---------- curriculum phase control ----------
+    def set_task_phase(self, phase: str) -> None:
+        """
+        phase in {"auto", "proxy_only"}.
+
+        - "auto": use time-based proxy/main split (t <= proxy_learning_time -> proxy)
+        - "proxy_only": force proxy reward for the whole episode
+        """
+        if phase not in ("auto", "proxy_only"):
+            raise ValueError(f"Unknown task phase: {phase}")
+        self._task_phase = phase
 
     # ---------- morphology hooks ----------
     def set_morphology(self, **scales: float) -> None:
@@ -331,8 +358,12 @@ class CheetahCustom(HalfCheetahEnv):
         obs = obs.astype(np.float32, copy=False)
         t = float(self.data.time)
 
-        # Determine current task
-        flag = 0.0 if t <= self.proxy_learning_time else 1.0
+        # Determine current task flag (0 = proxy, 1 = main)
+        if self._task_phase == "proxy_only":
+            # during curriculum: episodes are pure proxy
+            flag = 0.0
+        else:  # "auto": original time-based split
+            flag = 0.0 if t <= self.proxy_learning_time else 1.0
 
         # Target height for current time
         target_h = self._target_height(t)
@@ -429,8 +460,14 @@ class CheetahCustom(HalfCheetahEnv):
         denom = (1.0 - self.upright_bonus_margin + 1e-8)
         upright_piece = max(0.0, (up - self.upright_bonus_margin)) / denom
 
+        # --- Decide whether this step uses proxy or main reward ---
+        if self._task_phase == "proxy_only":
+            use_proxy = True
+        else:  # "auto" – old time-based behavior
+            use_proxy = (t <= self.proxy_learning_time)
+
         # If in training 
-        if (t <= self.proxy_learning_time):
+        if use_proxy:
             # proxy task reward
 
             # --- NEW PROXY X-POSITION CHECK ---
@@ -462,9 +499,19 @@ class CheetahCustom(HalfCheetahEnv):
                 info["proxy_vel_penalty"] = vel_penalty_score
         else:
             # default forward reward + upright bonus
-            rew = float(forward_rew + self.upright_bonus_k * upright_piece)
+            forward_score = float(np.exp(forward_rew / self.main_forward_sensitivity))
+            upright_score = float(np.exp(upright_piece / self.main_upright_sensitivity))
+
+            # Weighted combination
+            rew = self.main_forward_weight * forward_score + self.main_upright_weight * upright_score
             self._real_return += rew
+
+            # Log both raw and shaped pieces for debugging in wandb
             info["current_real_reward"] = rew
+            info["real_forward_raw"] = forward_rew
+            info["real_upright_raw"] = upright_piece
+            info["real_forward_score"] = forward_score
+            info["real_upright_score"] = upright_score
 
         self._last_reward = rew
         # early termination when clearly on back / collapsed
@@ -479,7 +526,11 @@ class CheetahCustom(HalfCheetahEnv):
 
         # episode return logging
         if term or trunc:
-            if self._reset_after_proxy and float(self.data.time) <= self.proxy_learning_time:
+            if (
+                self._task_phase == "auto"
+                and self._reset_after_proxy
+                and float(self.data.time) <= self.proxy_learning_time
+            ):
                 # Simply reset the environment and do not terminate and skip to real task phase
                 info["proxy_return"] = self._proxy_return
                 info["real_return"] = 0.0
@@ -491,8 +542,6 @@ class CheetahCustom(HalfCheetahEnv):
                 trunc = False
 
             else:
-                # self._proxy_return = 0.0
-                # self._real_return = 0.0
                 info["proxy_return"] = self._proxy_return
                 info["real_return"] = self._real_return
 

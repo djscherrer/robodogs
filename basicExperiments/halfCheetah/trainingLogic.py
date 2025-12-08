@@ -55,6 +55,32 @@ def save_checkpoint(ep_done: int, ckpt_dir, agent, optimizer, args, envs, global
     torch.save(_checkpoint_payload(agent, optimizer, args, envs, global_step, global_update_idx, best_return, episodes_done, start_time ), path)
     print(f"[save_checkpoint] saved checkpoint to: {path}")
 
+def _maybe_update_phase(args, envs, global_step):
+    """
+    proxy_only_timesteps > 0:
+        - while global_step < threshold: proxy-only episodes
+        - afterward: revert to original time-based behavior ("auto")
+    proxy_only_timesteps <= 0:
+        - always "auto"
+    """
+    if getattr(args, "proxy_only_timesteps", 0) > 0 and global_step < args.proxy_only_timesteps:
+        phase = "proxy_only"
+    else:
+        phase = "auto"
+
+    # Gymnasium vector envs (SyncVectorEnv / AsyncVectorEnv) use `.call`
+    if hasattr(envs, "call"):
+        envs.call("set_task_phase", phase=phase)
+    else:
+        # Fallback: iterate over sub-envs if needed
+        try:
+            for e in envs.envs:
+                # unwrap in case of wrappers
+                if hasattr(e.unwrapped, "set_task_phase"):
+                    e.unwrapped.set_task_phase(phase)
+        except AttributeError:
+            # If no such API, just silently skip
+            pass
 
 def train_gru(args, envs, device, run_name) -> Tuple[torch.nn.Module, int, int]:
     """
@@ -121,6 +147,8 @@ def train_gru(args, envs, device, run_name) -> Tuple[torch.nn.Module, int, int]:
     next_obs, _ = envs.reset(seed=args.seed)
     next_obs = torch.tensor(next_obs, dtype=torch.float32, device=device)
     next_done = torch.zeros(B, device=device)
+
+    _maybe_update_phase(args, envs, global_step)
 
     for iteration in range(1, args.num_iterations + 1):
         # LR annealing
@@ -443,6 +471,7 @@ def train_gru(args, envs, device, run_name) -> Tuple[torch.nn.Module, int, int]:
                 print("=== Finished evaluation ===\n")
 
         global_update_idx += 1
+        _maybe_update_phase(args, envs, global_step)
 
     # return agent + stats to main for final eval
     return agent, global_step, global_update_idx
@@ -519,6 +548,8 @@ def train_mlp(args, envs, device, run_name):
     next_obs, _ = envs.reset(seed=args.seed)
     next_obs = torch.as_tensor(next_obs, device=device, dtype=torch.float32)
     next_done = torch.zeros(B, device=device)
+
+    _maybe_update_phase(args, envs, global_step)
 
     for iteration in range(1, args.num_iterations + 1):
         # LR anneal
@@ -703,14 +734,18 @@ def train_mlp(args, envs, device, run_name):
 
                 # NOTE: if evaluate_on_fixed_scenarios got extra kwargs later,
                 # you can add them here similar to the GRU script.
-                rows = evaluateCheetah.evaluate_on_fixed_scenarios(
-                    agent,
-                    args.env_id,
-                    device,
-                    episodes_per_scenario=args.eval_episodes,
-                    video_root=eval_video_root,
-                    seed=args.seed + 100 + global_update_idx,
-                    num_envs=args.eval_num_envs,
+                rows, height_logs = evaluateCheetah.evaluate_on_fixed_scenarios(
+                        agent,
+                        args.env_id,
+                        device,
+                        episodes_per_scenario=args.eval_episodes,
+                        video_root=eval_video_root,
+                        seed=args.seed + 100 + global_update_idx,
+                        num_envs=args.eval_num_envs,
+                        proxy_steps_per_period=args.eval_proxy_steps_per_period,
+                        proxy_training_steps=args.eval_proxy_training_steps,
+                        proxy_amplitude=args.eval_proxy_amplitude,
+                        reset_after_proxy=args.reset_after_proxy,
                 )
 
                 ret_means = np.array([r["return_mean"] for r in rows], dtype=np.float64)
@@ -755,6 +790,27 @@ def train_mlp(args, envs, device, run_name):
                                 "global_step": global_step,
                             }
                         )
+                    for tr in height_logs:
+                        scen = tr["scenario"]
+                        ep_idx = tr["episode_idx"]
+                        h = tr["height"]
+                        tgt = tr["target"]
+                        T_h = len(h)
+                        xs = list(range(T_h))
+                        ys = [h.tolist(), tgt.tolist()]
+                        keys = ["height", "target"]
+
+                        line_plot = wandb.plot.line_series(
+                            xs=xs,
+                            ys=ys,
+                            keys=keys,
+                            title=f"{scen} ep {ep_idx}",
+                            xname="t_step",
+                        )
+                        wandb.log({
+                            f"height_logging/{scen}/ep_{ep_idx}": line_plot,
+                            "global_step": global_step,
+                        })
                     if eval_video_root and os.path.isdir(eval_video_root):
                         mp4s = sorted(
                             f for f in os.listdir(eval_video_root) if f.endswith(".mp4")
@@ -776,6 +832,7 @@ def train_mlp(args, envs, device, run_name):
                 print("=== Finished evaluation ===\n")
 
         global_update_idx += 1
+        _maybe_update_phase(args, envs, global_step)
 
     # return for final eval in main
     return agent, global_step, global_update_idx

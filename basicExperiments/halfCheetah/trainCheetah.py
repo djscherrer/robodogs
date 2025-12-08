@@ -22,7 +22,7 @@ from basicExperiments.halfCheetah import cheetahAgent, cheetahEnv, evaluateCheet
 class Args:
     exp_name: str = "Recurrent Proxy + Main: 256s_p + 256s_m"
     """the name of this experiment"""
-    agent_type: str = "mlp" # gru or mlp
+    agent_type: str = "gru" # gru or mlp
     """the type of agent to use"""
     seed: int = 2
     """seed of the experiment"""
@@ -55,6 +55,10 @@ class Args:
     eval_capture_video: bool = True
     """Whether to capture videos during evaluation"""
 
+    # Proxy Episode Switch
+    proxy_only_timesteps: int = 5_000_000
+    """Train only on proxy reward until this many env steps are collected; afterwards, pure main-task training."""
+    
     # Proxy task settings training
     proxy_training_steps: int = 64 #!TODO: change for runs
     """Number of steps over which to train on proxy task before switching to main task"""
@@ -80,7 +84,7 @@ class Args:
     # Algorithm specific arguments
     env_id: str = "Cheetah"
     """the id of the environment"""
-    total_timesteps: int = 50000
+    total_timesteps: int = 10_000_000
     """total timesteps of the experiments"""
     learning_rate: float = 2.5e-4
     """the learning rate of the optimizer"""
@@ -346,13 +350,6 @@ if __name__ == "__main__":
             if mp4s:
                 wandb.log({"eval/video": wandb.Video(os.path.join(eval_dir, mp4s[0]), fps=24, format="mp4")})
 
-        # Save checkpoints as an artifact
-        art = wandb.Artifact(name="cheetah-agent-recurrent", type="model")
-        best_path = os.path.join(ckpt_dir, "best.pt")
-        last_path = os.path.join(ckpt_dir, "last.pt")
-        if os.path.exists(best_path): art.add_file(best_path)
-        if os.path.exists(last_path): art.add_file(last_path)
-        wandb.log_artifact(art)
         wandb.finish()
 
     envs.close()
