@@ -459,7 +459,7 @@ class CheetahCustom(HalfCheetahEnv):
                 self._proxy_return += rew
                 info["current_proxy_reward"] = rew
                 info["proxy_track"] = proxy_score
-                info["proxy_vel_penalty"] = -vel_penalty_score
+                info["proxy_vel_penalty"] = vel_penalty_score
         else:
             # default forward reward + upright bonus
             rew = float(forward_rew + self.upright_bonus_k * upright_piece)

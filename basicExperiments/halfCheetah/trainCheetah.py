@@ -56,9 +56,9 @@ class Args:
     """Whether to capture videos during evaluation"""
 
     # Proxy task settings training
-    proxy_training_steps: int = 256 #!TODO: change for runs
+    proxy_training_steps: int = 64 #!TODO: change for runs
     """Number of steps over which to train on proxy task before switching to main task"""
-    proxy_steps_per_period: int = 256
+    proxy_steps_per_period: int = 128
     """Number of steps for one full sine wave period"""
     proxy_amplitude: float = 0.2
     """Amplitude of the proxy sine wave relative to inital torso height"""
@@ -70,9 +70,9 @@ class Args:
     """Whether to reset the environment after the proxy task phase, this will also allow to continue if proxy task fails"""
 
     # Proxy task settings evaluation
-    eval_proxy_training_steps: int = 256 #!TODO: change for runs
+    eval_proxy_training_steps: int = 64 #!TODO: change for runs
     """Number of steps over which to train on proxy task before switching to main task during evaluation"""
-    eval_proxy_steps_per_period: int = 256
+    eval_proxy_steps_per_period: int = 128
     """Number of steps for one full sine wave period during evaluation"""
     eval_proxy_amplitude: float = 0.2
     """Amplitude of the proxy sine wave during evaluation"""
@@ -80,7 +80,7 @@ class Args:
     # Algorithm specific arguments
     env_id: str = "Cheetah"
     """the id of the environment"""
-    total_timesteps: int = 5000000
+    total_timesteps: int = 50000
     """total timesteps of the experiments"""
     learning_rate: float = 2.5e-4
     """the learning rate of the optimizer"""
@@ -309,6 +309,7 @@ if __name__ == "__main__":
                 "scenario", "length", "masspole", "masscart",
                 "return_mean", "return_std", "len_mean", "len_std",
             ],
+            extrasaction="ignore",
         )
         writer.writeheader()
         writer.writerows(rows)
@@ -321,12 +322,22 @@ if __name__ == "__main__":
 
         # Log table
         table_cols = [
-            "scenario", "length", "masspole", "masscart",
-            "return_mean", "return_std", "len_mean", "len_std",
+            "scenario", "return_mean", "return_std", "len_mean", "len_std",
+            "proxy_return_mean", "proxy_return_std", "real_return_mean", "real_return_std"
         ]
         wb_table = wandb.Table(columns=table_cols)
         for r in rows:
-            wb_table.add_data(*[r[c] for c in table_cols])
+            wb_table.add_data(
+                r.get("scenario"),
+                float(r.get("return_mean", 0.0)),
+                float(r.get("return_std", 0.0)),
+                float(r.get("len_mean", 0.0)),
+                float(r.get("len_std", 0.0)),
+                float(r.get("proxy_return_mean", 0.0)),
+                float(r.get("proxy_return_std", 0.0)),
+                float(r.get("real_return_mean", 0.0)),
+                float(r.get("real_return_std", 0.0)),
+            )
         wandb.log({"eval/table": wb_table})
 
         # Log one short eval clip (if any video produced)

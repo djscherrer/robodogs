@@ -568,7 +568,7 @@ def train_mlp(args, envs, device, run_name):
                 episodes_done += 1
                 save_last(agent, optimizer, args, envs, global_step, global_update_idx, best_return, episodes_done, start_time, ckpt_dir)
                 if args.save_every_episodes and (episodes_done % args.save_every_episodes == 0):
-                    save_checkpoint(episodes_done, ckpt_dir, agent, optimizer, args, envs, global_step, global_update_idx, best_return, episodes_done, start_time, ckpt_dir)
+                    save_checkpoint(episodes_done, ckpt_dir, agent, optimizer, args, envs, global_step, global_update_idx, best_return, episodes_done, start_time)
 
                 if ep_r > best_return:
                     best_return = ep_r
