@@ -14,7 +14,7 @@ import torch.optim as optim
 import tyro
 
 from gymnasium.envs.registration import register
-from basicExperiments.cartPole import cartPoleEnv, cartPoleAgent, evaluateCartPole
+from Experiments.cartPole import cartPoleEnv, cartPoleAgent, evaluateCartPole
 
 @dataclass
 class Args:

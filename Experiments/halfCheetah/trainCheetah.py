@@ -15,7 +15,7 @@ import tyro
 
 from gymnasium.vector import AsyncVectorEnv
 from gymnasium.envs.registration import register
-from basicExperiments.halfCheetah import cheetahAgent, cheetahEnv, evaluateCheetah, trainingLogic
+from Experiments.halfCheetah import cheetahAgent, cheetahEnv, evaluateCheetah, trainingLogic
 
 
 @dataclass

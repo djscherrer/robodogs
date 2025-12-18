@@ -6,10 +6,10 @@ from typing import Optional, Dict, Tuple, List
 import numpy as np
 import torch
 import gymnasium as gym
-from basicExperiments.halfCheetah import cheetahEnv  # expects CheetahCustom + make_evaluate_env
+from Experiments.halfCheetah import cheetahEnv  # expects CheetahCustom + make_evaluate_env
 from gymnasium.envs.registration import register
 
-from basicExperiments.halfCheetah.cheetahAgent import GRUAgent
+from Experiments.halfCheetah.cheetahAgent import GRUAgent
 
 
 # -------------------------
@@ -365,7 +365,7 @@ def evaluate_on_random_configs(
 # -------------------------
 if __name__ == "__main__":
     import argparse
-    from basicExperiments.halfCheetah.cheetahAgent import load_agent_from_checkpoint
+    from Experiments.halfCheetah.cheetahAgent import load_agent_from_checkpoint
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--env-id", type=str, default="Cheetah_Recurrent")
